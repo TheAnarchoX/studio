@@ -5,3 +5,5 @@ build/
 *.tmp
 dist/
 *.spec.bak
+.worktrees/
+.superpowers/
