@@ -189,6 +189,9 @@ class Handler(BaseHTTPRequestHandler):
 class StudioServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False  # on Windows, reuse would let a second Studio bind the same port
+    # An export starts four headless Chromes at once; with the default queue of 5, Windows refuses some of their
+    # connections and a font or the metrics fail to load, so the image comes out in a fallback font.
+    request_queue_size = 64
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
