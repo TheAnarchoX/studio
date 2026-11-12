@@ -1328,9 +1328,9 @@ const Editor = (() => {
     const row = (e, depth, kind = "") => `<li class="${sel.includes(e.id) ? "on" : ""} ${Design.shownIn(e, d.format) ? "" : "off"} ${kind}" style="--depth:${depth}" data-id="${e.id}" ${!e.hidden && !Design.shownIn(e, d.format) ? `title="Hidden in ${F().label}"` : ""}>
       <span class="ic">${svg(ICON[e.type] || ICON.rect, 15)}</span>
       <span class="nm">${esc(label(e))}${kind === "maskbase" ? '<em class="mk">mask</em>' : ""}${e.role === "name" ? '<em>name</em>' : ""}</span>
-      <button class="tg nmt ${e.role === "name" ? "set" : ""}" data-role="${e.id}" title="${e.role === "name" ? "Not the name" : "Mark as the name: left out of the unsigned version"}">N</button>
-      <button class="tg ${e.hidden ? "set" : ""}" data-hide="${e.id}" title="${e.hidden ? "Show" : "Hide"}">${svg(e.hidden ? ICON.eyeoff : ICON.eye, 15)}</button>
-      <button class="tg ${e.locked ? "set" : ""}" data-lock="${e.id}" title="${e.locked ? "Unlock" : "Lock"}">${svg(e.locked ? ICON.lock : ICON.unlock, 15)}</button></li>`;
+      <button class="tg nmt ${e.role === "name" ? "is-on" : ""}" data-role="${e.id}" title="${e.role === "name" ? "Not the name" : "Mark as the name: left out of the unsigned version"}">N</button>
+      <button class="tg ${e.hidden ? "is-on" : ""}" data-hide="${e.id}" title="${e.hidden ? "Show" : "Hide"}">${svg(e.hidden ? ICON.eyeoff : ICON.eye, 15)}</button>
+      <button class="tg ${e.locked ? "is-on" : ""}" data-lock="${e.id}" title="${e.locked ? "Unlock" : "Lock"}">${svg(e.locked ? ICON.lock : ICON.unlock, 15)}</button></li>`;
     const unitRows = (u, depth) => row(u.base, depth, u.clips.length ? "maskbase" : "") + [...u.clips].reverse().map(c => row(c, depth + 1, "clipped")).join("");
     list.innerHTML = rows.map(r => r.u ? unitRows(r.u, 0) : `<li class="grp ${members(r.g).every(id => sel.includes(id)) ? "on" : ""} ${inGroup === r.g ? "inside" : ""}" data-gid="${r.g}">
         <button class="tw" data-twist="${r.g}" title="${collapsed.has(r.g) ? "Open" : "Close"}">${collapsed.has(r.g) ? "▸" : "▾"}</button>
