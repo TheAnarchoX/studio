@@ -1,0 +1,42 @@
+[project]
+name = "studio-poems"
+version = "1.0.0"
+description = "A local studio for poems and their artwork: notebook, carousel renders with pixel QA, a design editor, and MCP tools for Claude"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "studio/static/fonts/OFL-*.txt"]
+authors = [{name = "TheAnarchoX", email = "theanarchox@proton.me"}]
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.3,<3", "fonttools>=4.60", "pillow>=11", "numpy>=2"]
+keywords = ["poetry", "design", "carousel", "instagram", "mcp", "claude"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Multimedia :: Graphics :: Editors",
+]
+
+[project.optional-dependencies]
+app = ["pywebview>=5"]           # Studio's own window (falls back to a browser window without it)
+build = ["pyinstaller>=6"]       # the packaged executables
+
+[project.urls]
+Homepage = "https://github.com/TheAnarchoX/studio"
+Issues = "https://github.com/TheAnarchoX/studio/issues"
+
+[project.scripts]
+studio = "studio.__main__:main"
+
+[project.gui-scripts]
+studio-app = "studio.desktop:run_app"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["studio"]
+
+[tool.setuptools.package-data]
+studio = ["static/*", "static/fonts/*", "static/icons/*"]

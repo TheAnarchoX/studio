@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Studio</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/icons/icon-16.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#141619">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/editor.css">
+</head>
+<body>
+<header class="top">
+  <a class="mark" href="#/">Studio<i></i></a>
+  <nav class="nav" aria-label="Sections">
+    <a href="#/" data-nav="poems">Poems</a>
+    <a href="#/series" data-nav="series">Series</a>
+  </nav>
+  <span class="spacer"></span>
+  <nav class="nav nav-right" aria-label="Studio">
+    <a href="#/info" data-nav="info">Info</a>
+    <a href="#/settings" data-nav="settings">Settings</a>
+  </nav>
+  <button class="btn solid" id="newpoem" type="button"><span class="plus">+</span><span class="lbl">New poem</span></button>
+</header>
+<main id="app" tabindex="-1"></main>
+<dialog class="modal" id="dlg"></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/menu.js"></script>
+<script src="/static/design-core.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

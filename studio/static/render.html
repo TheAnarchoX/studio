@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Studio render</title>
+<style>
+@font-face{font-family:"Newsreader";font-style:normal;font-weight:200 800;font-display:block;src:url(/static/fonts/Newsreader-VF.ttf) format("truetype")}
+@font-face{font-family:"Newsreader";font-style:italic;font-weight:200 800;font-display:block;src:url(/static/fonts/Newsreader-Italic-VF.ttf) format("truetype")}
+@font-face{font-family:"Archivo";font-style:normal;font-weight:100 900;font-stretch:62% 125%;font-display:block;src:url(/static/fonts/Archivo-VF.ttf) format("truetype")}
+html,body{margin:0;background:#000;overflow:hidden}
+</style></head>
+<body><div id="board"></div>
+<script src="/static/design-core.js"></script>
+<script>
+/* One design, at 1x layout, for headless Chrome to screenshot at 2x (see studio/shoot.py). */
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const d = await (await fetch(`/api/design?id=${encodeURIComponent(q.get("id"))}&d=${encodeURIComponent(q.get("d"))}`)).json();
+  await Design.ready(d);
+  Design.render(document.getElementById("board"), d, {signed: q.get("sig") !== "0", format: q.get("f") || d.format});
+  document.body.dataset.ready = "1";
+})();
+</script></body></html>
