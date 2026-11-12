@@ -1,0 +1,6 @@
+{"name": "Signal", "swatches": [
+  {"name": "Night", "hex": "#0C0E11", "role": "background"},
+  {"name": "Paper", "hex": "#EEEAE2", "role": "text"},
+  {"name": "Signal red", "hex": "#DA291C", "role": "accent"},
+  {"name": "Fog", "hex": "#959AA2", "role": "muted"},
+  {"name": "Fog ink", "hex": "#77726B"}]}

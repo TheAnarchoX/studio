@@ -1,0 +1,166 @@
+)]}'
+{
+ "axisRegistry": [],
+ "familyMetadataList": [
+  {
+   "family": "Archivo",
+   "displayName": null,
+   "category": "Sans Serif",
+   "stroke": "Sans Serif",
+   "classifications": [],
+   "size": 699982,
+   "subsets": [
+    "menu",
+    "latin",
+    "latin-ext",
+    "vietnamese"
+   ],
+   "fonts": {
+    "100": {},
+    "100i": {},
+    "200": {},
+    "200i": {},
+    "300": {},
+    "300i": {},
+    "400": {},
+    "400i": {},
+    "500": {},
+    "500i": {},
+    "600": {},
+    "600i": {},
+    "700": {},
+    "700i": {},
+    "800": {},
+    "800i": {},
+    "900": {},
+    "900i": {}
+   },
+   "axes": [
+    {
+     "tag": "wdth",
+     "min": 62.0,
+     "max": 125.0,
+     "defaultValue": 100.0
+    },
+    {
+     "tag": "wght",
+     "min": 100.0,
+     "max": 900.0,
+     "defaultValue": 400.0
+    }
+   ],
+   "designers": [
+    "Omnibus-Type"
+   ],
+   "lastModified": "2025-09-08",
+   "dateAdded": "2016-12-03",
+   "popularity": 43,
+   "trending": 437,
+   "defaultSort": 45,
+   "androidFragment": null,
+   "isNoto": false,
+   "colorCapabilities": [],
+   "primaryScript": "",
+   "primaryLanguage": "",
+   "isOpenSource": true,
+   "isBrandFont": false,
+   "languages": []
+  },
+  {
+   "family": "Bebas Neue",
+   "displayName": null,
+   "category": "Sans Serif",
+   "stroke": "Sans Serif",
+   "classifications": [
+    "Display"
+   ],
+   "size": 61400,
+   "subsets": [
+    "menu",
+    "latin",
+    "latin-ext"
+   ],
+   "fonts": {
+    "400": {}
+   },
+   "axes": [],
+   "designers": [
+    "Ryoichi Tsunekawa"
+   ],
+   "lastModified": "2025-09-16",
+   "dateAdded": "2019-10-16",
+   "popularity": 44,
+   "trending": 703,
+   "defaultSort": 46,
+   "androidFragment": null,
+   "isNoto": false,
+   "colorCapabilities": [],
+   "primaryScript": "",
+   "primaryLanguage": "",
+   "isOpenSource": true,
+   "isBrandFont": false,
+   "languages": []
+  },
+  {
+   "family": "Newsreader",
+   "displayName": null,
+   "category": "Serif",
+   "stroke": "Serif",
+   "classifications": [],
+   "size": 473674,
+   "subsets": [
+    "menu",
+    "latin",
+    "latin-ext",
+    "vietnamese"
+   ],
+   "fonts": {
+    "200": {},
+    "200i": {},
+    "300": {},
+    "300i": {},
+    "400": {},
+    "400i": {},
+    "500": {},
+    "500i": {},
+    "600": {},
+    "600i": {},
+    "700": {},
+    "700i": {},
+    "800": {},
+    "800i": {}
+   },
+   "axes": [
+    {
+     "tag": "opsz",
+     "min": 6.0,
+     "max": 72.0,
+     "defaultValue": 16.0
+    },
+    {
+     "tag": "wght",
+     "min": 200.0,
+     "max": 800.0,
+     "defaultValue": 400.0
+    }
+   ],
+   "designers": [
+    "Production Type"
+   ],
+   "lastModified": "2025-09-08",
+   "dateAdded": "2020-07-01",
+   "popularity": 113,
+   "trending": 670,
+   "defaultSort": 113,
+   "androidFragment": null,
+   "isNoto": false,
+   "colorCapabilities": [],
+   "primaryScript": "",
+   "primaryLanguage": "",
+   "isOpenSource": true,
+   "isBrandFont": false,
+   "languages": []
+  }
+ ],
+ "promotedScript": []
+}

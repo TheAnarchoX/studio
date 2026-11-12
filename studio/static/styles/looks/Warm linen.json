@@ -1,0 +1,4 @@
+{"name": "Warm linen", "palette": "Warm linen",
+ "fonts": {"display": {"family": "EB Garamond", "weight": 500},
+           "text": {"family": "EB Garamond", "weight": 400},
+           "label": {"family": "Work Sans", "weight": 600}}}

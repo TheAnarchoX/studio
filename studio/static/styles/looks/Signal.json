@@ -1,0 +1,4 @@
+{"name": "Signal", "palette": "Signal",
+ "fonts": {"display": {"family": "Archivo", "weight": 900, "width": 87.5},
+           "text": {"family": "Newsreader", "weight": 400},
+           "label": {"family": "Archivo", "weight": 700}}}

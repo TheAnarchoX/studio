@@ -6,7 +6,7 @@
   studio mcp              the MCP server for Claude, over stdio (Claude starts this itself)
   studio install [--desktop]   add Studio to the Start menu / Applications / app launcher, with its icon
   studio uninstall        remove those launchers
-  studio config [key=value ...]   show or change settings (library, signature, port, chrome, open_with)
+  studio config [key=value ...]   show or change settings (library, signature, port, chrome, open_with, spelling)
   studio version
 """
 import sys

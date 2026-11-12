@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from studio.qa import measure
+from studio.qa import DEFAULT_CHECKS, measure
 
 NIGHT, PAPER = (12, 14, 17), (238, 234, 226)
 
@@ -57,6 +57,25 @@ class QATest(unittest.TestCase):
         rows = [(200, 300, 1500, 420)]
         m = self.run_pair(rows, (1510, 330, 1800, 400))[True]   # 10 image px from the row's end, same band
         self.assertTrue([i for i in m["issues"] if i["level"] == "fail" and "runs into" in i["text"]])
+
+    def test_near_miss_threshold_is_per_series(self):
+        rows = [(200, 300, 1500, 420), (200, 500, 1200, 620), (206, 700, 1400, 820)]
+        m = self.run_pair(rows, (200, 2300, 600, 2340))[True]
+        self.assertIn("off the left column", " ".join(i["text"] for i in m["issues"]))
+        s = slide(self.tmp / "s.png", rows)
+        m = measure((s, self.plate), None, (1080, 1350), 2, checks={"near": 2.0})[True]
+        self.assertNotIn("off the left column", " ".join(i["text"] for i in m["issues"]))
+
+    def test_story_safe_zone_is_per_series(self):
+        size = (2160, 3840)
+        plate = slide(self.tmp / "plate916.png", [], size=size)
+        s = slide(self.tmp / "s916.png", [(200, 500, 1500, 620)], size=size)    # starts 250 slide px down
+        texts = lambda m: " ".join(i["text"] for i in m["issues"])  # noqa: E731
+        self.assertIn("story", texts(measure((s, plate), None, (1080, 1920), 2, story=True)[True]))
+        m = measure((s, plate), None, (1080, 1920), 2, story=True, checks={"story_top": 200})[True]
+        self.assertNotIn("story", texts(m))
+        self.assertEqual(DEFAULT_CHECKS["story_top"], 280)
+
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+{"name": "Botanical", "swatches": [
+  {"name": "Moss paper", "hex": "#EEF0E6", "role": "background"},
+  {"name": "Forest", "hex": "#1E3A2B", "role": "text"},
+  {"name": "Fern", "hex": "#4F7942", "role": "accent"},
+  {"name": "Lichen", "hex": "#9AA58C", "role": "muted"},
+  {"name": "Berry", "hex": "#8E3B46"}]}

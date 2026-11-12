@@ -5,11 +5,12 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
-from studio.store import Store, StoreError, dump_poem, slugify
+from studio.store import Store, StoreError, dump_poem, slugify, write_text
 
 KIT = Path(os.environ["STUDIO_TEST_KIT"]) if os.environ.get("STUDIO_TEST_KIT") else None
 
@@ -92,6 +93,93 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(StoreError):
             self.s.update_series("Night Letters", {"palette": [{"name": "x", "hex": "red"}]})
 
+    def test_checks_validation(self):
+        self.s.create_series("Night Letters")
+        self.assertEqual(self.s.series_read("Night Letters")["checks"]["near"], 10.0)
+        r = self.s.update_series("Night Letters", {"checks": {"near": 4, "story_top": 200}})
+        self.assertEqual((r["checks"]["near"], r["checks"]["story_top"], r["checks"]["align"]), (4, 200, 1.0))
+        self.assertEqual(self.s.read(self.s.create("P", "Night Letters")["id"])["series_info"]["checks"]["near"], 4)
+        r = self.s.update_series("Night Letters", {"checks": {"near": None}})     # reset one field
+        self.assertEqual((r["checks"]["near"], r["checks"]["story_top"]), (10.0, 200))
+        for bad in ({"align": 21}, {"align": -1}, {"near": 101}, {"align": 5, "near": 5}, {"phone": 100},
+                    {"phone": 1300}, {"min_phone": 0}, {"min_phone": 41}, {"story_top": 601}, {"story_bottom": -1},
+                    {"story_top": "x"}, {"bogus": 1}):
+            with self.assertRaises(StoreError, msg=str(bad)):
+                self.s.update_series("Night Letters", {"checks": bad})
+        with self.assertRaises(StoreError) as ctx:
+            self.s.update_series("Night Letters", {"checks": {"align": 12}})
+        self.assertEqual(str(ctx.exception), "Near misses (10 px) must be larger than the alignment tolerance "
+                         "(12 px); near can be up to 100.")
+        self.assertEqual(self.s.series_read("Night Letters")["checks"]["story_top"], 200)
+
+    def test_update_poem_author(self):
+        p = self.s.create("Hold the Line")
+        out = self.s.update_poem_details(p["id"], {"author": "  A. Poet  "})
+        self.assertEqual(out["author"], "A. Poet")
+        self.s.update_poem_details(p["id"], {"author": "B. Poet"})
+        path = self.root / "Calls" / "Hold the Line" / "poem.json"
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["author"], "B. Poet")
+        self.assertEqual(path.read_text(encoding="utf-8"), dump_poem(saved))      # compact style kept
+        out = self.s.update_poem_details(p["id"], {"author": ""})
+        self.assertIsNone(out["author"])
+        self.assertNotIn("author", json.loads(path.read_text(encoding="utf-8")))
+        with self.assertRaisesRegex(StoreError, "120"):
+            self.s.update_poem_details(p["id"], {"author": "x" * 121})
+        with self.assertRaises(StoreError):
+            self.s.update_poem_details(p["id"], {"author": 5})
+
+    def test_read_gives_the_editor_the_series_formats(self):
+        p = self.s.create("Hold the Line")
+        self.assertEqual(self.s.read(p["id"])["series_info"]["formats"], ["1:1", "4:5", "9:16"])
+        self.s.update_series("Calls", {"formats": ["9:16"]})
+        self.assertEqual(self.s.read(p["id"])["series_info"]["formats"], ["9:16"])
+
+    def test_update_series_formats(self):
+        self.s.create_series("Night Letters", "Letters written at night.")
+        s = self.s.update_series("Night Letters", {"formats": ["4:5", "1:1"]})
+        self.assertEqual(s["formats"], ["1:1", "4:5"])
+        saved = json.loads((self.root / "Night Letters" / "series.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["formats"], ["1:1", "4:5"])
+        for bad in ([], ["2:3"], ["1:1", "2:3"], "1:1", None):
+            with self.assertRaisesRegex(StoreError, "Formats are 1:1, 4:5 and 9:16."):
+                self.s.update_series("Night Letters", {"formats": bad})
+        self.assertEqual(self.s.series_read("Night Letters")["formats"], ["1:1", "4:5"])
+
+    def test_update_series_writes_rules_and_concepts(self):
+        self.s.create_series("Night Letters", "Letters written at night.")
+        d = self.root / "Night Letters"
+        meta = (d / "series.json").read_bytes()
+        s = self.s.update_series("Night Letters", {"rules": "# Rules\r\n\r\n- Night only.\r\n", "concepts": "# Concepts\n\n## Lamp\n"})
+        self.assertEqual((d / "README.md").read_text(encoding="utf-8"), "# Rules\n\n- Night only.\n")
+        self.assertEqual((d / "CONCEPTS.md").read_text(encoding="utf-8"), "# Concepts\n\n## Lamp\n")
+        self.assertEqual((s["rules"], s["concepts"]), ("# Rules\n\n- Night only.\n", "# Concepts\n\n## Lamp\n"))
+        self.assertTrue(s["has_concepts"])
+        self.assertEqual((s["style"]["look"], s["style"]["look_from"]), (s["look"], "series"))   # the series page's style
+        self.assertEqual((d / "series.json").read_bytes(), meta)          # only the Markdown files change
+        s = self.s.update_series("Night Letters", {"concepts": ""})       # emptied, not deleted
+        self.assertEqual(((d / "CONCEPTS.md").read_text(encoding="utf-8"), s["concepts"]), ("", ""))
+        self.s.update_series("Calls", {"concepts": ""})                     # nothing to write: no file made
+        self.assertFalse((self.root / "Calls" / "CONCEPTS.md").exists())
+        self.assertFalse((self.root / "Calls" / "series.json").exists())
+
+    def test_own_palette_keeps_the_look_and_fonts(self):
+        """Add to palette's "own copy" of a library palette: only the palette becomes the series' own."""
+        self.s.create_series("Night Letters", look="Signal")
+        d = self.root / "Night Letters"
+        self.s.update_series("Night Letters", {"fonts": {"label": {"family": "Inter", "weight": 600}}})
+        before = json.loads((d / "series.json").read_text(encoding="utf-8"))
+        swatches = self.s.styles.palette("Signal")["swatches"] + [{"name": "#570000", "hex": "#570000"}]
+        s = self.s.update_series("Night Letters", {"palette": {"name": "Signal", "swatches": swatches}})
+        after = json.loads((d / "series.json").read_text(encoding="utf-8"))
+        self.assertEqual((after["look"], after["fonts"]), (before["look"], before["fonts"]))   # look and fonts as they were
+        self.assertEqual(after["palette"], {"name": "Signal", "swatches": swatches})
+        self.assertEqual((s["look"], s["palette_linked"], s["palette_from"]), ("Signal", False, "series"))
+        self.assertEqual([c["hex"] for c in s["palette"]][-1], "#570000")
+        self.assertEqual((s["font_roles"]["display"]["family"], s["font_roles"]["label"]["family"]), ("Archivo", "Inter"))
+        self.assertEqual(self.s.styles.palette("Signal")["source"], "bundled")                # the library is untouched
+        self.assertFalse((self.tmp / "Poems" / "Styles").exists() or (self.root.parent / "Styles" / "palettes").exists())
+
     def test_designs_stamps_and_trash(self):
         p = self.s.create("Hold the Line")
         d = {"name": "Wall", "format": "45", "background": "#DA291C", "elements": [{"type": "rect", "x": 0, "y": 0, "w": 10, "h": 10}]}
@@ -111,6 +199,33 @@ class StoreTest(unittest.TestCase):
     def test_files_stay_inside_poems(self):
         with self.assertRaises(StoreError):
             self.s.file("../../secret.txt")
+
+
+class WriteTextTest(unittest.TestCase):
+    def test_threads_writing_one_file_do_not_collide(self):
+        """The server answers requests on threads, so two can write one file at once: each write has its own temp file,
+        none fails, and the file ends up holding one whole write."""
+        tmp = Path(tempfile.mkdtemp(prefix="studio-write-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        path = tmp / "poem.json"
+        texts = [f"{i}\n" + str(i % 10) * 50000 + "\n" for i in range(12)]
+        start, errors = threading.Barrier(len(texts)), []
+
+        def write(text):
+            try:
+                start.wait()
+                for _ in range(10):
+                    write_text(path, text)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+        threads = [threading.Thread(target=write, args=(t,)) for t in texts]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertIn(path.read_text(encoding="utf-8"), texts)
+        self.assertEqual([p.name for p in tmp.iterdir()], ["poem.json"])      # no temp file left behind
 
 
 if __name__ == "__main__":

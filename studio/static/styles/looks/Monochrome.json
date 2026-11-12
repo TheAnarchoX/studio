@@ -1,0 +1,4 @@
+{"name": "Monochrome", "palette": "Monochrome",
+ "fonts": {"display": {"family": "Inter", "weight": 800},
+           "text": {"family": "Inter", "weight": 400},
+           "label": {"family": "Inter", "weight": 600}}}

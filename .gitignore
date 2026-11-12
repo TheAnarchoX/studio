@@ -7,3 +7,4 @@ dist/
 *.spec.bak
 .worktrees/
 .superpowers/
+tools/node_modules/

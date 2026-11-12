@@ -5,3 +5,5 @@
 *.ico binary
 *.icns binary
 *.ttf binary
+studio/static/vendor/prosemirror.js text eol=lf
+tools/package-lock.json text eol=lf

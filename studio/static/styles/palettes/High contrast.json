@@ -1,0 +1,5 @@
+{"name": "High contrast", "swatches": [
+  {"name": "Black", "hex": "#000000", "role": "background"},
+  {"name": "White", "hex": "#FFFFFF", "role": "text"},
+  {"name": "Yellow", "hex": "#FFD400", "role": "accent"},
+  {"name": "Grey", "hex": "#9A9A9A", "role": "muted"}]}

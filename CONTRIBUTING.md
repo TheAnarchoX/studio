@@ -40,6 +40,18 @@ STUDIO_ART=/tmp/studio-test STUDIO_CONFIG=/tmp/studio-test/config.json STUDIO_PO
 | `studio/config.py` | settings |
 | `studio/static/` | the front end: `app.js` (pages), `editor.js` (Design tab), `design-core.js` (the renderer shared with exports) |
 
+## Rebuilding the vendored editor
+
+The book editor runs on ProseMirror, bundled into one file, `studio/static/vendor/prosemirror.js`. Rebuild it only when you add an export to `tools/vendor-entry.js` or change a version in `tools/package.json`:
+
+```bash
+cd tools
+npm ci
+node build_vendor.mjs
+```
+
+The output is committed, so Studio never needs Node at runtime. The build is deterministic: rebuilding without changes leaves the file untouched.
+
 ## Reporting bugs
 
 Open an issue with what you did, what you expected and what happened, plus your OS and `studio version`.

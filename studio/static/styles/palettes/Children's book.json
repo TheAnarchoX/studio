@@ -1,0 +1,6 @@
+{"name": "Children's book", "swatches": [
+  {"name": "Cream", "hex": "#FFF8E7", "role": "background"},
+  {"name": "Night blue", "hex": "#1D3557", "role": "text"},
+  {"name": "Tomato", "hex": "#E63946", "role": "accent"},
+  {"name": "Sky", "hex": "#A8DADC", "role": "muted"},
+  {"name": "Sun", "hex": "#F4A261"}]}

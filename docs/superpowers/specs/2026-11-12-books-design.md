@@ -5,6 +5,11 @@ parts 2–4, which get their own specs before they are built.*
 
 ## Goal
 
+**Principle:** Studio works equally well with AI as without, and nobody ever has to touch a config file;
+everyone gets a tailored experience. Every capability Claude's tools have also has a control in the interface,
+and every setting, rule and style is editable in the app. The one exception is connecting Claude itself, which
+stays a copy-paste on the Info page.
+
 A place in Studio to write a book and take it to an almost print-ready PDF: a writing window that feels light and
 comfortable but has everything under the hood, a composer for book design, a board for whatever feeds the
 writing, and tools that let Claude help without touching the prose. Books are a separate area from poems;
@@ -224,7 +229,7 @@ endpoints, with the same local-only checks as the rest:
 | `POST /api/book/piece/new`, `/delete` | add a piece of a kind and form; move one to the trash |
 | `GET /api/book/history?b=&f=`, `POST /api/book/restore` | snapshots; restore one |
 | `POST /api/book/import`, `/import/commit` | propose an import; write it |
-| `GET /api/book/export?b=&format=docx\|md` | download an export |
+| `POST /api/book/export` `{b, format: docx\|md\|zip}` | download an export; a dated copy is kept in `exports/` |
 | `POST /api/book/edition` | freeze an edition |
 | `GET /api/book/search?b=&q=` | find across the book; `POST /api/book/replace` |
 | `GET /api/book/sources?b=`, `POST /api/book/sources` | read and write `sources.json` |

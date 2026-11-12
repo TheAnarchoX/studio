@@ -1,0 +1,5 @@
+{"name": "Ultramarine", "swatches": [
+  {"name": "Night", "hex": "#0B0E1A", "role": "background"},
+  {"name": "Paper", "hex": "#F1EEE6", "role": "text"},
+  {"name": "Ultramarine", "hex": "#1F3DD1", "role": "accent"},
+  {"name": "Fog", "hex": "#9AA0AE", "role": "muted"}]}

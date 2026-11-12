@@ -1,0 +1,6 @@
+{"name": "Pastel", "swatches": [
+  {"name": "Cream", "hex": "#FBF6EE", "role": "background"},
+  {"name": "Plum ink", "hex": "#3B2E3A", "role": "text"},
+  {"name": "Peach", "hex": "#F2A28B", "role": "accent"},
+  {"name": "Sage", "hex": "#A9C5B4", "role": "muted"},
+  {"name": "Lilac", "hex": "#C9B6E4"}]}

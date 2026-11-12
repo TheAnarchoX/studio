@@ -9,22 +9,28 @@
 <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <meta name="theme-color" content="#141619">
+<!-- every font family's @font-face; app.css comes after it, so its interface faces for Newsreader and Archivo stay the ones used -->
+<link rel="stylesheet" href="/api/fonts.css">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/editor.css">
+<link rel="stylesheet" href="/static/book.css">
+<link rel="stylesheet" href="/static/book-tools.css">
 </head>
 <body>
 <header class="top">
   <a class="mark" href="#/">Studio<i></i></a>
   <nav class="nav" aria-label="Sections">
-    <a href="#/" data-nav="poems">Poems</a>
-    <a href="#/series" data-nav="series">Series</a>
+    <a href="#/" data-nav="home">Home</a>
+    <a href="#/poems" data-nav="poems">Poems</a>
+    <a href="#/books" data-nav="books">Books</a>
   </nav>
   <span class="spacer"></span>
   <nav class="nav nav-right" aria-label="Studio">
+    <a href="#/styles" data-nav="styles">Styles</a>
     <a href="#/info" data-nav="info">Info</a>
     <a href="#/settings" data-nav="settings">Settings</a>
   </nav>
-  <button class="btn solid" id="newpoem" type="button"><span class="plus">+</span><span class="lbl">New poem</span></button>
+  <button class="btn solid" id="new" type="button" aria-haspopup="menu"><span class="plus">+</span><span class="lbl">New</span></button>
 </header>
 <main id="app" tabindex="-1"></main>
 <dialog class="modal" id="dlg"></dialog>
@@ -33,5 +39,15 @@
 <script src="/static/design-core.js"></script>
 <script src="/static/editor.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/home.js"></script>
+<script src="/static/styles.js"></script>
+<script src="/static/vendor/prosemirror.js"></script>
+<script src="/static/book-schema.js"></script>
+<script src="/static/book.js"></script>
+<script src="/static/book-text.js"></script>
+<script src="/static/book-editor.js"></script>
+<script src="/static/book-tools.js"></script>
+<script src="/static/book-rail.js"></script>
+<script src="/static/welcome.js"></script>
 </body>
 </html>

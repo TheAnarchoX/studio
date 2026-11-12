@@ -1,0 +1,5 @@
+{"name": "Academic", "swatches": [
+  {"name": "Ivory", "hex": "#FAF8F2", "role": "background"},
+  {"name": "Ink", "hex": "#1C1C1C", "role": "text"},
+  {"name": "Oxford blue", "hex": "#1F3A5F", "role": "accent"},
+  {"name": "Slate", "hex": "#6B7280", "role": "muted"}]}

@@ -1,0 +1,4 @@
+{"name": "Botanical", "palette": "Botanical",
+ "fonts": {"display": {"family": "Fraunces", "weight": 600},
+           "text": {"family": "Literata", "weight": 400},
+           "label": {"family": "Work Sans", "weight": 600}}}

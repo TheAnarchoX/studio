@@ -49,6 +49,12 @@ extra keys are the concept's parameters, which the kit interprets.
 QA renders a **plate** of each slide: the same page with a stylesheet that makes all text inside `.slide`
 transparent. Keep text in elements under `.slide` and backgrounds out of text colour, and QA can find the ink.
 
+## In the Art tab
+
+The Art tab drives a kit without Claude: it lists the kit's concepts and lets you choose the slides, write the
+brief and posting notes, render, and run QA, all through the functions above. Claude does the same through the
+MCP tools, over the same code.
+
 ## Rules and briefs
 
 `Poems/<Series>/README.md` holds the series' rules and `_kit/BRIEF-TEMPLATE.md` (optional) the shape of a brief;

@@ -1,9 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Studio render</title>
+<link rel="stylesheet" href="/api/fonts.css?display=block">
 <style>
-@font-face{font-family:"Newsreader";font-style:normal;font-weight:200 800;font-display:block;src:url(/static/fonts/Newsreader-VF.ttf) format("truetype")}
-@font-face{font-family:"Newsreader";font-style:italic;font-weight:200 800;font-display:block;src:url(/static/fonts/Newsreader-Italic-VF.ttf) format("truetype")}
-@font-face{font-family:"Archivo";font-style:normal;font-weight:100 900;font-stretch:62% 125%;font-display:block;src:url(/static/fonts/Archivo-VF.ttf) format("truetype")}
 html,body{margin:0;background:#000;overflow:hidden}
 </style></head>
 <body><div id="board"></div>
@@ -12,6 +10,15 @@ html,body{margin:0;background:#000;overflow:hidden}
 /* One design, at 1x layout, for headless Chrome to screenshot at 2x (see studio/shoot.py). */
 (async () => {
   const q = new URLSearchParams(location.search);
+  // Without the registry an export would set Archivo without its widths and with synthesised italics.
+  // shoot.py refuses to export when the registry is empty; this is the second line of defence: show the
+  // error on the page and never set the data-ready marker.
+  const fr = await fetch("/api/fonts");
+  if (!fr.ok) {
+    document.body.innerHTML = '<p style="color:#fff;font:32px sans-serif;padding:40px">The font list did not load (' + fr.status + "), so this was not rendered.</p>";
+    throw new Error("The font list didn't load (" + fr.status + ")");
+  }
+  Design.setFonts(await fr.json());
   const d = await (await fetch(`/api/design?id=${encodeURIComponent(q.get("id"))}&d=${encodeURIComponent(q.get("d"))}`)).json();
   await Design.ready(d);
   Design.render(document.getElementById("board"), d, {signed: q.get("sig") !== "0", format: q.get("f") || d.format});

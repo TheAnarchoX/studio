@@ -1,0 +1,22 @@
+{
+  "name": "studio-vendor-build",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Builds studio/static/vendor/prosemirror.js. Dev-time only; Studio never needs Node at runtime.",
+  "type": "module",
+  "dependencies": {
+    "prosemirror-commands": "1.7.2",
+    "prosemirror-dropcursor": "1.8.4",
+    "prosemirror-gapcursor": "1.4.1",
+    "prosemirror-history": "1.5.1",
+    "prosemirror-inputrules": "1.5.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-model": "1.25.13",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-transform": "1.12.5",
+    "prosemirror-view": "1.42.9"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -1,0 +1,4 @@
+{"name": "Riso", "palette": "Riso",
+ "fonts": {"display": {"family": "Bebas Neue", "weight": 400},
+           "text": {"family": "Work Sans", "weight": 400},
+           "label": {"family": "IBM Plex Mono", "weight": 500}}}

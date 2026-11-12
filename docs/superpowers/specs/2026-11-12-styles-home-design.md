@@ -5,6 +5,11 @@
 
 ## Goal
 
+**Principle:** Studio works equally well with AI as without, and nobody ever has to touch a config file;
+everyone gets a tailored experience. Every capability Claude's tools have also has a control in the interface,
+and every setting, rule and style is editable in the app. The one exception is connecting Claude itself, which
+stays a copy-paste on the Info page.
+
 Studio is open source, so it has to be a great experience straight after installing, for people whose taste is
 not the author's. That means: looks, palettes, fonts and rules you can choose and change yourself, globally and
 per series, book, poem or piece; a home page now that Studio holds more than poems; a light theme; and a short

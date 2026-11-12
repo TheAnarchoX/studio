@@ -1,0 +1,5 @@
+{"name": "Warm linen", "swatches": [
+  {"name": "Linen", "hex": "#F0E9DC", "role": "background"},
+  {"name": "Soot", "hex": "#16130F", "role": "text"},
+  {"name": "Ochre", "hex": "#C98A1B", "role": "accent"},
+  {"name": "Clay", "hex": "#8E5B3C", "role": "muted"}]}

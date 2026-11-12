@@ -77,6 +77,12 @@ async def main(poem, out_dir, env):
             Path(out_dir, "render-preview.jpg").write_bytes(base64.b64decode(imgs[0].data))
             print("\n— qa\n" + text(await call("qa", poem=poem))[:1200])
 
+        assert "fonts" in (info.get("style") or {}), "read_poem should include the resolved style"
+        bad = await s.call_tool("save_design", {"poem": poem, "design": {"name": "Bad font", "format": "45",
+                "background": "#000000", "elements": [{"type": "text", "text": "x", "font": "No Such Face"}]}})
+        assert bad.is_error and "Unknown fonts: No Such Face. Available: " in text(bad), "unknown fonts should be refused"
+        print("— save_design refuses unknown fonts")
+
         design = {"name": "Test card", "format": "45", "background": "#0C0E11", "elements": [
             {"type": "text", "text": "Hold the line", "font": "Archivo", "weight": 900, "stretch": 87.5, "size": 120,
              "case": "upper", "color": "#EEEAE2", "x": 88, "y": 200},

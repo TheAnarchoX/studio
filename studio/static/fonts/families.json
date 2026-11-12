@@ -1,0 +1,198 @@
+[
+  {
+    "family": "Newsreader",
+    "category": "serif",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Newsreader.txt",
+    "files": [
+      {
+        "file": "Newsreader-VF.ttf",
+        "italic": false
+      },
+      {
+        "file": "Newsreader-Italic-VF.ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Archivo",
+    "category": "sans",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Archivo.txt",
+    "files": [
+      {
+        "file": "Archivo-VF.ttf",
+        "italic": false
+      }
+    ]
+  },
+  {
+    "family": "Literata",
+    "category": "serif",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Literata.txt",
+    "files": [
+      {
+        "file": "Literata[opsz,wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "Literata-Italic[opsz,wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "EB Garamond",
+    "category": "serif",
+    "license": "OFL-1.1",
+    "license_file": "OFL-EBGaramond.txt",
+    "files": [
+      {
+        "file": "EBGaramond[wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "EBGaramond-Italic[wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Source Serif 4",
+    "category": "serif",
+    "license": "OFL-1.1",
+    "license_file": "OFL-SourceSerif4.txt",
+    "files": [
+      {
+        "file": "SourceSerif4[opsz,wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "SourceSerif4-Italic[opsz,wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Inter",
+    "category": "sans",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Inter.txt",
+    "files": [
+      {
+        "file": "Inter[opsz,wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "Inter-Italic[opsz,wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Work Sans",
+    "category": "sans",
+    "license": "OFL-1.1",
+    "license_file": "OFL-WorkSans.txt",
+    "files": [
+      {
+        "file": "WorkSans[wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "WorkSans-Italic[wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Fraunces",
+    "category": "display",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Fraunces.txt",
+    "files": [
+      {
+        "file": "Fraunces[SOFT,WONK,opsz,wght].ttf",
+        "italic": false
+      },
+      {
+        "file": "Fraunces-Italic[SOFT,WONK,opsz,wght].ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Bebas Neue",
+    "category": "display",
+    "license": "OFL-1.1",
+    "license_file": "OFL-BebasNeue.txt",
+    "files": [
+      {
+        "file": "BebasNeue-Regular.ttf",
+        "italic": false
+      }
+    ]
+  },
+  {
+    "family": "IBM Plex Mono",
+    "category": "mono",
+    "license": "OFL-1.1",
+    "license_file": "OFL-IBMPlexMono.txt",
+    "files": [
+      {
+        "file": "IBMPlexMono-Regular.ttf",
+        "italic": false
+      },
+      {
+        "file": "IBMPlexMono-Italic.ttf",
+        "italic": true
+      },
+      {
+        "file": "IBMPlexMono-Bold.ttf",
+        "italic": false
+      },
+      {
+        "file": "IBMPlexMono-BoldItalic.ttf",
+        "italic": true
+      }
+    ]
+  },
+  {
+    "family": "Caveat",
+    "category": "hand",
+    "license": "OFL-1.1",
+    "license_file": "OFL-Caveat.txt",
+    "files": [
+      {
+        "file": "Caveat[wght].ttf",
+        "italic": false
+      }
+    ]
+  },
+  {
+    "family": "Atkinson Hyperlegible",
+    "category": "sans",
+    "license": "OFL-1.1",
+    "license_file": "OFL-AtkinsonHyperlegible.txt",
+    "files": [
+      {
+        "file": "AtkinsonHyperlegible-Regular.ttf",
+        "italic": false
+      },
+      {
+        "file": "AtkinsonHyperlegible-Italic.ttf",
+        "italic": true
+      },
+      {
+        "file": "AtkinsonHyperlegible-Bold.ttf",
+        "italic": false
+      },
+      {
+        "file": "AtkinsonHyperlegible-BoldItalic.ttf",
+        "italic": true
+      }
+    ]
+  }
+]

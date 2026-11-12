@@ -1,0 +1,282 @@
+/* Books: the shelf, a book's contents and its settings. Interface colours are app.css's theme roles; a cover takes the
+   book's own look. */
+
+/* ——— the shelf ——— */
+.book-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:36px 24px;align-items:start}
+.bcard{display:flex;flex-direction:column;gap:14px;min-width:0;text-decoration:none}
+.bcover{container-type:inline-size;aspect-ratio:2/3;display:flex;flex-direction:column;justify-content:space-between;gap:12px;padding:16% 12% 12%;
+  border:1px solid var(--line-soft);overflow:hidden;transition:transform .22s var(--ease),border-color .2s}
+.bcard:hover .bcover{transform:translateY(-4px);border-color:var(--line)}
+.bcover .bt{font-size:clamp(18px,13cqi,44px);line-height:1.06;letter-spacing:-.012em;overflow-wrap:break-word;hyphens:auto;
+  display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+.bcover .ba{font-size:clamp(9px,4.4cqi,13px);line-height:1.3;letter-spacing:.16em;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bcover.broken{background:var(--panel);color:var(--fog);border-style:dashed}
+.bcard .info{display:flex;flex-direction:column;gap:6px;min-width:0}
+.bcard .t{font:600 23px/1.1 var(--serif);letter-spacing:-.012em;overflow-wrap:break-word}
+.bcard .row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--fog);font-variant-numeric:tabular-nums}
+.bk-err{font-size:12px;line-height:1.4;color:var(--danger)}
+.bk-bar{display:flex;gap:2px;height:3px;margin-top:6px}
+.bk-bar i{display:block;min-width:3px}
+.bs-idea{background:var(--line)}
+.bs-draft{background:var(--fog)}
+.bs-revised{background:var(--paper-dim)}
+.bs-final{background:var(--paper)}
+.bcard.new{aspect-ratio:2/3;align-items:center;justify-content:center;gap:10px;border:1px dashed var(--line);background:transparent;color:var(--fog);cursor:pointer;
+  font:600 12px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase}
+.bcard.new:hover{color:var(--paper);border-color:var(--paper-dim)}
+.bcard.new .plus{font:300 44px/1 var(--sans)}
+
+/* ——— new book ——— */
+.nb-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:640px){.nb-two{grid-template-columns:1fr}}
+.pick.kinds{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+.pick.kinds label{min-height:0}
+.pick.kinds .d{font:400 13px/1.4 var(--sans);color:var(--fog)}
+.bk-langpick{display:flex;gap:8px;max-width:420px}
+.bk-langpick .select{flex:1 1 0;min-width:0;height:45px}      /* as tall as an .input beside it: 11 + 21 + 11 + 2 */
+.bk-langpick .input{flex:0 0 140px}
+
+/* ——— a book ——— */
+.pagehead .bk-by{display:block;margin:14px 0 0}
+/* narrow windows: the five tabs scroll sideways instead of breaking their labels (1px of room keeps the underline whole) */
+@media (max-width:640px){.bk-tabs{overflow-x:auto;scrollbar-width:none;padding-bottom:1px;margin-bottom:31px}.bk-tabs a{flex:none;white-space:nowrap}}
+.bk-dot{width:8px;height:8px;border:1px solid transparent}
+.bk-dot.idea{border-color:var(--fog)}
+.bk-dot.draft{background:var(--fog);border-color:var(--fog)}
+.bk-dot.revised{background:var(--paper-dim);border-color:var(--paper-dim)}
+.bk-dot.final{background:var(--paper);border-color:var(--paper)}
+
+/* ——— importing a book ——— */
+.bi{display:flex;flex-direction:column;gap:32px;max-width:1200px}
+.bi-2{grid-column:span 2}
+.bi-fields .hint{margin-top:8px}
+.bi-fields .select{height:45px}      /* as tall as the input beside it */
+.bi-warn{margin:0;max-width:none}
+.bi-head{display:flex;align-items:baseline;gap:16px;margin:0 0 12px}
+.bi-head .label{margin:0}
+.bi-head .hint{margin:0}
+.bi-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-soft)}
+.bi-row{display:grid;grid-template-columns:168px 104px minmax(0,1.1fr) minmax(0,1.5fr) 84px auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft)}
+.bi-first{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:italic 400 15px/1.3 var(--serif);color:var(--fog)}
+.bi-w{text-align:right;font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bi-acts{display:flex;gap:4px;justify-content:flex-end}
+.bi-split{display:flex;flex-direction:column;max-height:min(50vh,420px);overflow-y:auto;border-top:1px solid var(--line-soft)}
+.bi-split label{display:flex;align-items:baseline;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-soft);font:400 15px/1.4 var(--serif);cursor:pointer}
+.bi-split input{margin:0;accent-color:var(--red)}
+@media (max-width:1100px){.bi-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.bi-row .input,.bi-first{grid-column:1/-1}.bi-w{text-align:left}.bi-acts{grid-column:2/-1}}
+
+/* ——— a book's settings ——— */
+.bk-short{max-width:360px}
+.bk-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.bk-fields .label{margin-bottom:8px;padding-top:3px}       /* level with the row's own label */
+@media (max-width:860px){.bk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.bk-end{margin-top:56px;border-top:1px solid var(--line-soft)}
+.bk-end .sl-row:first-child{padding-top:28px}
+.bk-end2{margin-top:0;border-top:0}      /* Exports and Trash share one rule */
+.bk-eds{list-style:none;margin:0;padding:0}
+.bk-eds:not(:empty){margin-top:16px;border-top:1px solid var(--line-soft)}
+.bk-eds li{display:grid;grid-template-columns:110px minmax(0,1fr) auto;gap:16px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+.bk-ed-d{font:500 13px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+.bk-ed-n{font:400 15px/1.4 var(--serif);overflow-wrap:anywhere}
+.bk-features .pick.kinds{max-width:1200px}
+.bk-features .switch,.bk-sheet .switch{min-height:22px}
+.bk-diff{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-soft)}
+.bk-diff li{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--line-soft);color:var(--paper-dim)}
+.bk-diff li:last-child{border-bottom:0}       /* the dialog's foot draws the closing rule */
+.bk-diff .label{margin:0}
+.bk-diff b{color:var(--paper);font-weight:600}
+.bk-quotes button{font:500 17px/1 var(--serif);letter-spacing:0;text-transform:none;padding:8px 14px 9px}      /* 34px, as the other segments */
+.bk-terms{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;max-width:1200px}
+.bk-term{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.3fr) 76px;gap:8px;align-items:center}
+.bk-term.head .label{margin:0;padding-top:3px}
+.bk-term.head:only-child{display:none}        /* no terms yet: no column heads */
+.bk-term .btn{justify-content:center}
+.bk-sheet textarea{max-width:1200px;min-height:120px}
+@media (max-width:700px){.bk-term{grid-template-columns:1fr 1fr}.bk-term.head{display:none}}
+
+/* ——— the writing window ——— */
+/* Fixed under the top bar: the binder, the text and the status bar fill the window and scroll on their own. The text is
+   set in the book's look (--bk-font, --bk-weight on .bw-page); the interface around it keeps Studio's theme. */
+.bw{position:fixed;inset:60px 0 0;z-index:1;display:grid;grid-template-columns:272px minmax(0,1fr) auto;grid-template-rows:minmax(0,1fr) 36px;background:var(--night)}
+.bw.nobinder{grid-template-columns:0 minmax(0,1fr) auto}
+.bw.nobinder .bw-binder{display:none}
+.bw-binder{grid-column:1;grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--room);border-right:1px solid var(--line-soft)}
+.bw-main{grid-column:2;grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.bw-rail{grid-column:3;grid-row:1}
+.bw-status{grid-column:1/-1;grid-row:2;display:flex;align-items:center;gap:20px;min-width:0;padding:0 20px;background:var(--room);border-top:1px solid var(--line-soft);
+  font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+.bw-status .state{font-size:12px;letter-spacing:.02em;white-space:nowrap}
+.bw-counts{margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bw-tog{background:none;border:0;padding:0;font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bw-tog:hover,.bw-tog[aria-pressed="true"]{color:var(--paper)}
+
+/* the binder: the book's pieces in front matter, body and back matter */
+/* the head scrolls with the list (staying on top), so a window that shows scrollbars narrows both alike */
+.bb-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.bb-head{position:sticky;top:0;z-index:2;padding:22px 20px 18px;background:var(--room);border-bottom:1px solid var(--line-soft)}
+.bb-k{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.bb-k .kicker{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bb-set{text-decoration:none;flex:none}
+.bb-set:hover{color:var(--paper)}
+.bb-book{margin:12px 0 0;font:600 22px/1.15 var(--serif);letter-spacing:-.012em;overflow-wrap:break-word}
+.bb-total{margin:7px 0 0;font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+.bb-groups{padding:0 20px 28px}
+.bb-group{margin-top:24px}
+.bb-ghead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 9px}
+.bb-ghead .label{margin:0;font-variant-numeric:tabular-nums}
+.bb-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-soft)}
+.bb-row{position:relative;z-index:0;border-bottom:1px solid var(--line-soft)}
+.bb-a{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;color:inherit;text-decoration:none;cursor:pointer}
+.bb-a:focus-visible{outline-offset:0}
+.bb-row.in .bb-a{padding-left:16px}
+.bb-t{font:500 16px/1.3 var(--serif);letter-spacing:-.004em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bb-row.part .bb-t{font-weight:650}
+.bb-row.untitled .bb-t{font-style:italic;font-weight:400;color:var(--paper-dim)}
+.bb-row.auto .bb-t{font-weight:400;color:var(--fog)}
+.bb-w{font:500 12px/1 var(--sans);color:var(--fog);text-align:right;font-variant-numeric:tabular-nums}
+.bb-row:not(.auto) .bb-a:hover .bb-t{color:var(--paper-hot)}
+/* the open piece: a highlight that bleeds into the binder's padding, with the red rule at its edge */
+.bb-row.cur::before{content:"";position:absolute;inset:0 -20px;z-index:-1;background:var(--panel);box-shadow:inset 2px 0 0 var(--red)}
+.bb-row.dragging{opacity:.4}
+.bb-row.drop-before::after,.bb-row.drop-after::after{content:"";position:absolute;left:0;right:0;height:2px;background:var(--red);pointer-events:none}
+.bb-row.drop-before::after{top:-1.5px}
+.bb-row.drop-after::after{bottom:-1.5px}
+.bb-row.part.drop-after::after,.bb-row.in.drop-before::after,.bb-row.in.drop-after::after{left:16px}     /* into the part */
+.bb-empty{margin:24px 0 0;color:var(--fog);font-size:13px}
+.bb-foot{display:flex;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--line-soft)}
+
+/* the text, with the margin column to its right */
+.bw-bar{display:flex;flex-direction:column;gap:8px;padding:10px 24px;background:var(--red-deep);border-bottom:1px solid var(--line-soft);
+  font:400 14px/1.4 var(--sans);color:var(--paper)}
+.bw-bar-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px}
+.bw-bar-t{margin-right:auto}
+.bw-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.bw-page{position:relative;display:grid;grid-template-columns:minmax(0,65ch) clamp(170px,19vw,248px);column-gap:clamp(28px,4vw,56px);justify-content:center;
+  padding:72px clamp(20px,4vw,56px) 42vh;font:var(--bk-weight,400) 19px/1.65 var(--bk-font,var(--serif));color:var(--paper)}
+.bw-col{position:relative;min-width:0}
+.bw-margin{position:relative;min-width:0}
+.bw-over{position:absolute;inset:0;pointer-events:none}
+.bw-over>*{pointer-events:auto}
+.bw-none{margin:0;font:400 16px/1.5 var(--sans);color:var(--fog)}
+.bw-none b{color:var(--paper);font-weight:600}
+
+/* ProseMirror's own needs */
+.bk-text{position:relative;min-height:40vh;outline:none;caret-color:var(--red);word-wrap:break-word;white-space:pre-wrap;white-space:break-spaces;
+  font-variant-ligatures:none;font-feature-settings:"liga" 0}
+.ProseMirror-hideselection *::selection{background:transparent}
+.ProseMirror-hideselection{caret-color:transparent}
+.ProseMirror [draggable][contenteditable=false]{user-select:text}
+img.ProseMirror-separator{display:inline!important;border:none!important;margin:0!important}
+.ProseMirror-gapcursor{display:none;pointer-events:none;position:absolute}
+.ProseMirror-gapcursor::after{content:"";display:block;position:absolute;top:-2px;width:20px;border-top:1px solid var(--paper);animation:bk-blink 1.1s steps(2,start) infinite}
+@keyframes bk-blink{to{visibility:hidden}}
+.ProseMirror-focused .ProseMirror-gapcursor{display:block}
+.bk-text .ProseMirror-selectednode{outline:2px solid var(--red);outline-offset:3px}
+.bk-drop{background:var(--red)!important}
+
+/* the dialect's elements */
+.bk-text p{margin:0 0 .65em}
+.bk-text h1.bk-title{margin:0 0 1em;font-size:1.75em;line-height:1.18;font-weight:600;letter-spacing:-.012em}
+.bk-text h2{margin:1.5em 0 .55em;font-size:1.3em;line-height:1.25;font-weight:600;letter-spacing:-.008em}
+.bk-text h3{margin:1.3em 0 .5em;font-size:1.1em;line-height:1.3;font-weight:600}
+.bk-text>:first-child{margin-top:0}
+.bk-text strong{font-weight:700}
+.bk-text blockquote{margin:.2em 0 1em 1.6em;padding:0;color:var(--paper-dim)}
+.bk-text hr{display:block;border:0;margin:0;padding:0;overflow:visible;height:1.65em}
+.bk-text hr.bk-scene{margin:.1em 0 .75em;text-align:center}
+.bk-text hr.bk-scene::before{content:"*\2002\2002*\2002\2002*";color:var(--fog);line-height:1.65em}
+.bk-text hr.bk-page{position:relative;margin:.1em 0 .75em}
+.bk-text hr.bk-page::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px dashed var(--line)}
+.bk-text hr.bk-page::after{content:"Page break";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:0 10px;background:var(--night);
+  font:600 10px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--fog)}
+.bk-text .bk-epigraph{margin:.2em 0 1.5em 22%;font-size:.9em;line-height:1.6;color:var(--paper-dim)}
+.bk-text .bk-epigraph p{margin:0 0 .4em}
+.bk-text .bk-attr{margin:.5em 0 0}
+.bk-text .bk-attr::before{content:"— "}
+.bk-text .bk-poem{margin:.2em 0 1.2em 2em}
+.bk-text .bk-poem p{margin:0 0 .9em}
+.bk-bl{display:inline-block;width:0;height:0;vertical-align:baseline}
+.bk-note-a{white-space:nowrap}
+.bk-note{padding:0 .06em;font-size:.66em;line-height:0;vertical-align:super;color:var(--red);font-variant-numeric:lining-nums;cursor:pointer}
+.bk-note-a.quiet .bk-note{color:var(--fog)}
+.bk-note-a.sel .bk-note,.bk-note-a.on .bk-note{background:color-mix(in srgb,var(--red) 18%,transparent)}
+.bk-cite{margin:0 .12em;padding:.2em .5em;font:500 .7em/1 var(--sans);letter-spacing:.02em;color:var(--fog);background:var(--panel-2);white-space:nowrap;cursor:pointer}
+.bk-cite:hover{color:var(--paper)}
+.bk-cite.unknown{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+.bk-cite.sel{box-shadow:inset 0 0 0 1px var(--red)}
+.bw-text.nocite .bk-cite{opacity:.7}
+.bk-idx{text-decoration:underline dotted var(--fog);text-decoration-thickness:1px;text-underline-offset:.24em}
+.bw-text.noidx .bk-idx{text-decoration-color:var(--line)}
+.bk-text mark.bk-comment{padding:0;color:inherit;background:color-mix(in srgb,var(--red) 13%,transparent)}
+.bk-text .bk-com-on{background:color-mix(in srgb,var(--red) 26%,transparent)}
+.bk-sc{font-variant-caps:small-caps;letter-spacing:.03em}
+.bk-fig{margin:.4em 0 1.4em}
+.bk-fig img{display:block;max-width:100%;height:auto;margin:0 auto}
+.bk-fig.sel img{outline:2px solid var(--red);outline-offset:3px}
+.bk-fig-none{padding:28px;border:1px dashed var(--line);font:400 13px/1.4 var(--sans);color:var(--fog);text-align:center}
+.bk-cap{display:block;width:100%;margin:8px 0 0;padding:0;background:transparent;border:0;font:400 13px/1.5 var(--sans);color:var(--fog);text-align:center}
+.bk-cap:focus{outline:none;color:var(--paper)}
+.bk-cap::placeholder{color:var(--placeholder)}
+.bk-linked{margin:.2em 0 1.2em 2em;padding-left:18px;border-left:2px solid var(--line);color:var(--paper-dim);cursor:default}
+.bk-linked.sel{border-left-color:var(--red)}
+.bk-linked-h{display:flex;align-items:baseline;gap:12px}
+.bk-linked-h .label{margin:0}
+.bk-linked-h .btn{margin-left:auto;align-self:center}
+.bk-linked-src{font:500 11px/1 var(--sans);color:var(--fog)}
+.bk-linked-t{margin:.35em 0 .45em;font-weight:600;color:var(--paper)}
+.bk-linked-lines p,.bk-linked-none{margin:0 0 .9em}
+.bk-linked-none{font-style:italic;color:var(--fog)}
+.bk-ph::before{content:attr(data-ph);float:left;height:0;color:var(--placeholder);pointer-events:none;font-style:normal}
+.bk-text .bk-attr.bk-ph::before{content:"— " attr(data-ph)}
+.bk-ruler{position:absolute;visibility:hidden;pointer-events:none;margin:0}
+
+/* the margin: notes and comments beside their line (book-text.js places them) */
+.bm-item{position:absolute;top:0;left:0;right:0}
+.bm-ruler{visibility:hidden;pointer-events:none}
+.bm-note{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:baseline;font:var(--bk-weight,400) 14px/1.5 var(--bk-font,var(--serif));color:var(--paper-dim)}
+.bm-n{font-size:12px;font-weight:600;color:var(--red);font-variant-numeric:lining-nums tabular-nums}
+.bm-body{position:relative;min-width:0}
+.bm-ed{outline:none;white-space:pre-wrap;word-wrap:break-word;caret-color:var(--red)}
+.bm-ed strong{font-weight:700}
+.bm-note.empty .bm-body::before{content:"Note";position:absolute;top:0;left:0;color:var(--placeholder);pointer-events:none}
+.bm-note.on .bm-ed{color:var(--paper)}
+.bm-com{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:baseline;padding-left:22px;font:400 13px/1.45 var(--sans);color:var(--paper-dim)}
+.bm-com::before{content:"";position:absolute;left:0;top:calc(var(--com-bl,13px) - 7px);width:7px;height:7px;background:color-mix(in srgb,var(--red) 55%,transparent)}
+.bm-com.on::before{background:var(--red)}
+.bm-ta{display:block;width:100%;min-height:0;margin:0;padding:0;resize:none;overflow:hidden;background:transparent;border:0;font:inherit;color:inherit;letter-spacing:inherit}
+.bm-ta:focus{outline:none;color:var(--paper)}
+.bm-ta::placeholder{color:var(--placeholder)}
+.bm-acts{display:flex}
+.bm-com:not(:hover):not(.on):not(:focus-within) .bm-acts{visibility:hidden}
+.bm-btn{background:none;border:0;padding:0;font:600 10.5px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bm-btn:hover{color:var(--paper)}
+
+/* on the text: the selection bar, the / menu and the small forms */
+.bk-selbar{position:absolute;z-index:5;display:flex;padding:3px;background:var(--pop);border:1px solid var(--line);box-shadow:0 10px 30px var(--shadow-1);white-space:nowrap}
+.bk-sb{background:none;border:0;padding:9px 10px;font:600 10.5px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bk-sb:hover{color:var(--paper)}
+.bk-sb[aria-pressed="true"]{color:var(--paper);box-shadow:inset 0 -2px 0 var(--red)}
+.bk-slash{position:absolute;z-index:5;min-width:208px;padding:4px;background:var(--pop);border:1px solid var(--line);box-shadow:0 12px 34px var(--shadow-1)}
+.bk-slash-i{display:block;width:100%;padding:9px 12px;text-align:left;background:none;border:0;font:500 14px/1.2 var(--sans);color:var(--paper);cursor:pointer}
+.bk-slash-i.on,.bk-slash-i:hover{background:var(--panel-2)}
+.bk-pop{position:absolute;z-index:6;width:min(560px,calc(100% - 32px));display:flex;flex-direction:column;gap:14px;padding:18px;background:var(--pop);border:1px solid var(--line);
+  box-shadow:0 16px 44px var(--shadow-1);font:400 14px/1.4 var(--sans);color:var(--paper)}
+.bk-pop .label{margin:0 0 6px}
+.bk-pop .hint{margin:0}
+.bk-pop .input,.bk-pop .select{height:38px;padding:8px 10px;font:400 14px/1.4 var(--sans)}
+.bk-idxf{width:min(420px,calc(100% - 32px))}
+.bk-f{display:block;min-width:0}
+.bk-cite-rows{display:flex;flex-direction:column;gap:12px}
+.bk-cite-row{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,.8fr) minmax(0,.8fr) auto;gap:10px;align-items:end}
+.bk-cite-row [data-k=key]{margin-top:6px}
+.bk-cite-x{align-self:end;padding:12px 0}
+.bk-cite-rows:has(>.bk-cite-row:only-child) .bk-cite-x{display:none}
+.bk-cite-rows:has(>.bk-cite-row:only-child) .bk-cite-row{grid-template-columns:minmax(0,1.7fr) minmax(0,.8fr) minmax(0,.8fr)}     /* no empty column for Remove */
+.bk-pop-f{display:flex;align-items:center;gap:8px}
+.bk-pop-f .grow{flex:1}
+
+/* the linked poem picker */
+.bk-pp-list{display:flex;flex-direction:column;gap:20px;max-height:min(50vh,440px);overflow-y:auto}
+.bk-pp-list .label{margin:0 0 4px}
+.bk-pp-i{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft);font:500 17px/1.3 var(--serif);cursor:pointer}
+.bk-pp-i input{margin:0;accent-color:var(--red)}

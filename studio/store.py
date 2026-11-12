@@ -6,6 +6,8 @@ with a poem.json. Poems are named by id ("<Series>/<Poem folder>"), or loosely b
 import json
 import os
 import re
+import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,19 +20,15 @@ DRAFT_STAMP = "%Y-%m-%dT%H%M"
 WRITING_NOTES = "writing-notes.md"   # not notes.md: on Windows that is the same file as NOTES.md
 KEY_ORDER = ["number", "title", "slug", "author", "status", "lines", "slides"]
 SERIES_FILE = "series.json"
-SERIES_KEYS = ["name", "tagline", "description", "signature", "palette", "fonts", "formats", "created"]
-FONTS = ["Newsreader", "Archivo"]   # the typefaces Studio ships (static/fonts)
-PALETTES = {  # starting points for a new series
-    "Signal": [["Night", "#0C0E11"], ["Paper", "#EEEAE2"], ["Signal red", "#DA291C"], ["Fog", "#959AA2"],
-               ["Fog ink", "#77726B"]],
-    "Ink and paper": [["Ink", "#141414"], ["Paper", "#F2EFE8"], ["Graphite", "#6E6B66"], ["Pencil", "#A9A59E"]],
-    "Blood": [["Black", "#0B0B0C"], ["Bone", "#E9E4DA"], ["Blood", "#7A0019"], ["Ash", "#8C8A87"]],
-    "Ultramarine": [["Night", "#0B0E1A"], ["Paper", "#F1EEE6"], ["Ultramarine", "#1F3DD1"], ["Fog", "#9AA0AE"]],
-    "Ochre": [["Soot", "#16130F"], ["Linen", "#F0E9DC"], ["Ochre", "#C98A1B"], ["Clay", "#8E5B3C"]],
-}
+SERIES_KEYS = ["name", "tagline", "description", "signature", "look", "palette", "fonts", "formats", "created", "checks", "example"]
+# The design checks (qa.py measures with them): defaults and the range each may take, (low, high).
+CHECK_DEFAULTS = {"align": 1.0, "near": 10.0, "phone": 430, "min_phone": 7.0, "story_top": 280, "story_bottom": 330}
+CHECK_RANGES = {"align": (0, 20), "near": (0, 100), "phone": (200, 1200), "min_phone": (1, 40),
+                "story_top": (0, 600), "story_bottom": (0, 600)}
 
 
 DESIGN_FORMATS = {"11": (1080, 1080, "1x1"), "45": (1080, 1350, "4x5"), "916": (1080, 1920, "9x16")}
+SERIES_FORMATS = {"1:1": "11", "4:5": "45", "9:16": "916"}    # a series' formats, as the designs name them
 DESIGN_TYPES = {"text", "rect", "ellipse", "line", "shape", "path"}
 RENDERS = "Design renders"   # not "Designs": on Windows that is the same folder as designs/
 
@@ -64,9 +62,10 @@ def dump_poem(poem):
 
 
 def write_text(path: Path, text: str):
-    """Atomic write; retries briefly because Windows refuses to replace a file someone is reading."""
+    """Atomic write; retries briefly because Windows refuses to replace a file someone is reading. The temp file is
+    this call's own (process and thread), so two requests writing one file at once don't share it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(text, encoding="utf-8", newline="\n")
     for attempt in range(20):
         try:
@@ -112,6 +111,8 @@ class Store:
     def __init__(self, root=None, cache=None):
         self.root = Path(root or config.POEMS).resolve()
         self.cache = Path(cache or config.CACHE)
+        self._fonts_seen = None     # (signature of the design files, fonts they use), see fonts_in_designs
+        self.styles = styles.Styles(self.root.parent)   # the library: Poems/ and Styles/ side by side
 
     # ——— finding things ———
     def series_dirs(self):
@@ -277,6 +278,7 @@ class Store:
         except (KitError, KeyError, IndexError) as e:
             art = {"error": str(e)}
         qa = read_text(folder / "qa.json")
+        style = self.styles.resolve(self.style_levels(self.series_json(folder.parent), poem))
         return {"id": self.pid(folder), "series": folder.parent.name, "folder": folder.name,
                 "path": str(folder), "title": poem.get("title") or folder.name, "slug": poem.get("slug"),
                 "number": poem.get("number"), "author": poem.get("author"),
@@ -286,8 +288,9 @@ class Store:
                 "brief": read_text(folder / "BRIEF.md"), "notes": read_text(folder / "NOTES.md"),
                 "art": art, "qa": json.loads(qa) if qa else None, "designs": self.designs(folder),
                 "series_info": {k: v for k, v in self.series_meta(folder.parent).items()
-                                if k in ("name", "tagline", "palette", "fonts", "signature", "has_kit")},
-                "stamp": self.stamp(folder)}
+                                if k in ("name", "tagline", "palette", "fonts", "signature", "has_kit",
+                                         "look", "palette_from", "palette_linked", "font_roles", "checks", "formats")},
+                "style": style, "stamp": self.stamp(folder)}
 
     def stamp(self, folder: Path = None):
         """A change marker: the newest modification time in a poem folder (or across all poems)."""
@@ -313,9 +316,16 @@ class Store:
         return p
 
     # ——— designs (the visual editor's files) ———
+    def design_formats(self, folder: Path):
+        """The design formats ("11", "45", "916") the poem's series shows and exports, in the usual order."""
+        want = self.series_json(folder.parent).get("formats")
+        keys = [SERIES_FORMATS[f] for f in want if f in SERIES_FORMATS] if isinstance(want, list) else []
+        return [k for k in DESIGN_FORMATS if k in keys] or list(DESIGN_FORMATS)
+
     def designs(self, folder: Path):
         out = []
         d = folder / "designs"
+        allowed = self.design_formats(folder)
         for f in sorted(d.glob("*.json")) if d.exists() else []:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
@@ -324,6 +334,8 @@ class Store:
             fmt = data.get("format", "45")
             exports = {}
             for k, (_, _, tag) in DESIGN_FORMATS.items():
+                if k not in allowed:
+                    continue
                 row = {}
                 for key, suffix in (("signed", ""), ("unsigned", "-noname")):
                     png = folder / RENDERS / f.stem / f"{f.stem}-{tag}{suffix}.png"
@@ -435,19 +447,65 @@ class Store:
         os.replace(f, d / ".trash" / f"{f.stem}-{datetime.now().strftime('%Y%m%dT%H%M%S')}.json")
 
     # ——— series ———
-    def series_meta(self, d: Path):
-        meta = {}
+    def series_json(self, d: Path):
+        """series.json as it is on disk ({} when there is none). Reading never rewrites it."""
         f = d / SERIES_FILE
-        if f.exists():
-            try:
-                meta = json.loads(f.read_text(encoding="utf-8"))
-            except ValueError as e:
-                raise StoreError(f"{d.name}/{SERIES_FILE} can't be read: {e}") from None
-        palette = meta.get("palette") or [{"name": n, "hex": h} for n, h in PALETTES["Signal"]]
+        if not f.exists():
+            return {}
+        try:
+            meta = json.loads(f.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise StoreError(f"{d.name}/{SERIES_FILE} can't be read: {e}") from None
+        return meta if isinstance(meta, dict) else {}
+
+    @staticmethod
+    def style_levels(series: dict, poem: dict = None):
+        """The levels a work's style is resolved through, global first."""
+        levels = [("global", {"look": config.DEFAULT_LOOK}), ("series", series)]
+        return levels + [("poem", poem)] if poem is not None else levels
+
+    @staticmethod
+    def series_checks(meta):
+        """The series' own design checks from series.json (known keys with numbers only)."""
+        own = meta.get("checks")
+        return {k: v for k, v in own.items() if k in CHECK_DEFAULTS and isinstance(v, (int, float))
+                and not isinstance(v, bool)} if isinstance(own, dict) else {}
+
+    def _checks(self, meta, given):
+        """The series' checks after applying `given` (a number sets one, None resets it); validated."""
+        if not isinstance(given, dict):
+            raise StoreError("checks must be an object")
+        own = self.series_checks(meta)
+        for k, v in given.items():
+            if k not in CHECK_DEFAULTS:
+                raise StoreError(f"unknown check {k!r}; checks: " + ", ".join(CHECK_DEFAULTS))
+            if v is None:
+                own.pop(k, None)
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+                raise StoreError(f"check {k} must be a number")
+            lo, hi = CHECK_RANGES[k]
+            if not lo <= v <= hi:
+                raise StoreError(f"check {k} must be between {lo} and {hi}")
+            own[k] = v
+        both = {**CHECK_DEFAULTS, **own}
+        if both["near"] <= both["align"]:
+            raise StoreError(f"Near misses ({both['near']:g} px) must be larger than the alignment tolerance "
+                             f"({both['align']:g} px); near can be up to {CHECK_RANGES['near'][1]}.")
+        return own or None
+
+    def series_meta(self, d: Path):
+        meta = self.series_json(d)
+        f = d / SERIES_FILE
+        style = self.styles.resolve(self.style_levels(meta))
+        roles = style["fonts"]
+        families = dict.fromkeys(roles[r]["family"] for r in styles.FONT_ROLES if r in roles)
         return {"name": d.name, "tagline": meta.get("tagline", ""), "description": meta.get("description", ""),
-                "signature": meta.get("signature", config.SIGNATURE), "palette": palette,
-                "fonts": meta.get("fonts") or [{"family": "Newsreader", "role": "voice"},
-                                                {"family": "Archivo", "role": "command"}],
+                "signature": meta.get("signature", config.SIGNATURE), "look": style["look"],
+                "palette": style["palette"]["swatches"], "palette_from": style["palette"]["from"],
+                "palette_linked": style["palette"]["linked"], "font_roles": roles,
+                "checks": {**CHECK_DEFAULTS, **self.series_checks(meta)},
+                "fonts": [{"family": fam} for fam in families],
                 "formats": meta.get("formats") or ["1:1", "4:5", "9:16"], "created": meta.get("created"),
                 "has_file": f.exists(), "has_kit": (d / "_kit" / "build.py").exists(),
                 "has_rules": (d / "README.md").exists(), "has_concepts": (d / "CONCEPTS.md").exists()}
@@ -472,6 +530,7 @@ class Store:
         m = self.series_meta(d)
         poems = self.list(d.name)
         m.update({"rules": read_text(d / "README.md"), "concepts": read_text(d / "CONCEPTS.md"),
+                  "style": self.styles.resolve(self.style_levels(self.series_json(d))),
                   "poems": poems, "stamp": self.stamp_series(d)})
         return m
 
@@ -485,7 +544,9 @@ class Store:
         keep["name"] = d.name
         write_text(d / SERIES_FILE, json.dumps(keep, ensure_ascii=False, indent=2) + "\n")
 
-    def create_series(self, name, tagline="", palette=None, description=""):
+    def create_series(self, name, tagline="", palette=None, description="", look=None):
+        """A new series following a look (the default look unless one is named); a palette, when given, is linked
+        by name (or kept as the series' own when it is a list of swatches)."""
         name = " ".join(str(name or "").split())
         folder = folder_name(name)
         if not folder:
@@ -493,53 +554,218 @@ class Store:
         d = self.root / folder
         if d.exists():
             raise StoreError(f"{folder} already exists in Poems")
+        look = self.styles.look(look)["name"] if look else config.DEFAULT_LOOK
         pal = self._palette(palette)
         tagline = str(tagline or "").strip()
-        d.mkdir(parents=True)
-        self.write_series(d, {"tagline": tagline, "description": str(description or "").strip(),
-                              "signature": config.SIGNATURE, "palette": pal,
-                              "fonts": [{"family": "Newsreader", "role": "voice"},
-                                        {"family": "Archivo", "role": "command"}],
-                              "formats": ["1:1", "4:5", "9:16"], "created": datetime.now().date().isoformat()})
-        colours = ", ".join(f"{c['name']} `{c['hex']}`" for c in pal)
-        write_text(d / "README.md", f"# {folder}\n\n{tagline or 'A new series of poems.'}\n\n"
-                   "## The rules\n\n"
-                   f"- **Palette:** {colours}.\n"
-                   "- **Type:** Newsreader and Archivo.\n"
-                   "- **Words:** only the poem's own words and the name.\n"
-                   + (f"- **Signature:** \"{config.SIGNATURE}\". " if config.SIGNATURE else "- **Signature:** the poet's name. ")
-                   + "Every image also exists unsigned, with an identical layout.\n"
-                   "- **Formats:** 1:1 for X, 4:5 for the Instagram feed, 9:16 for stories, rendered at 2x.\n")
+        try:
+            d.mkdir(parents=True)          # not exist_ok: when another call has just made it, this one stops here
+        except FileExistsError:
+            raise StoreError(f"{folder} already exists in Poems") from None
+        try:
+            self.write_series(d, {"tagline": tagline, "description": str(description or "").strip(),
+                                  "signature": config.SIGNATURE, "look": look, "palette": pal,
+                                  "formats": ["1:1", "4:5", "9:16"], "created": datetime.now().date().isoformat()})
+            meta = self.series_meta(d)
+            colours = ", ".join(f"{c.get('name') or c['hex']} `{c['hex']}`" for c in meta["palette"])
+            roles = meta["font_roles"]
+            families = " and ".join(dict.fromkeys(roles[r]["family"] for r in ("display", "text") if r in roles))
+            house = self.styles.rules().strip()        # the library's house rules come first, as Claude reads them
+            write_text(d / "README.md", f"# {folder}\n\n{tagline or 'A new series of poems.'}\n\n"
+                       + (f"## House rules\n\n{house}\n\n" if house else "")
+                       + "## The rules\n\n"
+                       f"- **Palette:** {colours}.\n"
+                       f"- **Type:** {families}.\n"
+                       "- **Words:** only the poem's own words and the name.\n"
+                       + (f"- **Signature:** \"{config.SIGNATURE}\". " if config.SIGNATURE else "- **Signature:** the poet's name. ")
+                       + "Every image also exists unsigned, with an identical layout.\n"
+                       "- **Formats:** 1:1 for X, 4:5 for the Instagram feed, 9:16 for stories, rendered at 2x.\n")
+        except BaseException:
+            shutil.rmtree(d, ignore_errors=True)       # this call made the folder a moment ago: nothing of anyone's is in it
+            raise
         return self.series_read(folder)
 
     def update_series(self, name, fields):
+        """Changes series.json: tagline, description, signature, formats (a non-empty subset of 1:1, 4:5, 9:16); look, palette (a name or swatches) and fonts (per
+        role), each None to follow the level above again; detach (the style in effect becomes the series' own) or
+        link ("<look>": follow that look, dropping the own palette and fonts). "rules" and "concepts" are the
+        Markdown of README.md and CONCEPTS.md; series.json is only written when one of its own fields is given."""
         d = self.series_dir(name)
-        meta = self.series_meta(d)
+        meta = self.series_json(d)
+        fields = fields if isinstance(fields, dict) else {}
+        docs = {f: str(fields[k] or "").replace("\r\n", "\n") for k, f in (("rules", "README.md"), ("concepts", "CONCEPTS.md"))
+                if k in fields}
+        own = any(k in fields for k in ("tagline", "description", "signature", "formats", "look", "palette", "fonts", "checks")) \
+            or bool(fields.get("detach") or fields.get("link"))
         for k in ("tagline", "description", "signature"):
             if k in fields:
                 meta[k] = str(fields[k] or "").strip()
+        if "formats" in fields:
+            want, ok = fields["formats"], ("1:1", "4:5", "9:16")
+            if not isinstance(want, list) or not want or any(f not in ok for f in want):
+                raise StoreError("Formats are 1:1, 4:5 and 9:16.")
+            meta["formats"] = [f for f in ok if f in want]
+        if fields.get("detach"):
+            meta = self.styles.detach(meta, self.styles.resolve(self.style_levels(meta)))
+        if fields.get("link"):
+            meta = self.styles.link(meta, fields["link"])
+        changes = {}
+        if "look" in fields:
+            changes["look"] = self.styles.look(fields["look"])["name"] if fields["look"] else None
         if "palette" in fields:
-            meta["palette"] = self._palette(fields["palette"])
-        self.write_series(d, meta)
+            changes["palette"] = self._palette(fields["palette"])
+        if "fonts" in fields:
+            changes["fonts"] = styles.clean_fonts(fields["fonts"], every=False) if fields["fonts"] else None
+        if "checks" in fields:
+            changes["checks"] = self._checks(meta, fields["checks"])
+        for k, v in changes.items():
+            if v is None:
+                meta.pop(k, None)
+            else:
+                meta[k] = v
+        for f, text in docs.items():
+            if text or (d / f).exists():      # an empty text doesn't make a file; it empties one
+                write_text(d / f, text)
+        if own:
+            self.write_series(d, meta)
         return self.series_read(d.name)
 
-    @staticmethod
-    def _palette(palette):
-        if isinstance(palette, str):
-            if palette not in PALETTES:
-                raise StoreError(f"palette must be one of: {', '.join(PALETTES)}")
-            return [{"name": n, "hex": h} for n, h in PALETTES[palette]]
-        if not palette:
-            return [{"name": n, "hex": h} for n, h in PALETTES["Signal"]]
-        out = []
-        for c in palette:
-            hexv = str(c.get("hex", "")).strip()
-            if not re.fullmatch(r"#[0-9A-Fa-f]{6}", hexv):
-                raise StoreError(f"not a colour: {hexv!r} (use #RRGGBB)")
-            out.append({"name": str(c.get("name") or hexv).strip()[:40], "hex": hexv.upper()})
-        if not 2 <= len(out) <= 8:
-            raise StoreError("a palette has 2 to 8 colours")
+    def update_poem_details(self, ref, fields):
+        """The poem's own details in poem.json: author (trimmed, up to 120 characters; empty removes it)."""
+        folder = self.resolve(ref)
+        fields = fields if isinstance(fields, dict) else {}
+        changes = {}
+        if "author" in fields:
+            if fields["author"] is not None and not isinstance(fields["author"], str):
+                raise StoreError("The author is text.")
+            author = (fields["author"] or "").strip()
+            if len(author) > 120:
+                raise StoreError("The author can be up to 120 characters.")
+            changes["author"] = author or None
+
+        def change(poem):
+            for k, v in changes.items():
+                if v is None:
+                    poem.pop(k, None)
+                else:
+                    poem[k] = v
+        self.update(folder, change)
+        return self.read(self.pid(folder))
+
+    def update_poem_style(self, ref, fields):
+        """The poem's own look, palette and fonts in poem.json (each None or empty to follow the series again);
+        "clear" removes all three."""
+        folder = self.resolve(ref)
+        fields = fields if isinstance(fields, dict) else {}
+        changes = {}
+        if "look" in fields:
+            changes["look"] = self.styles.look(fields["look"])["name"] if fields["look"] else None
+        if "palette" in fields:
+            changes["palette"] = self._palette(fields["palette"])
+        if "fonts" in fields:
+            changes["fonts"] = styles.clean_fonts(fields["fonts"], every=False) if fields["fonts"] else None
+        if fields.get("clear"):
+            changes = dict.fromkeys(("look", "palette", "fonts"))
+
+        def change(poem):
+            for k, v in changes.items():
+                if v is None:
+                    poem.pop(k, None)
+                else:
+                    poem[k] = v
+        self.update(folder, change)
+        return self.read(self.pid(folder))
+
+    def series_design_files(self, name):
+        """Every designs/*.json of every poem in a series."""
+        d = self.series_dir(name)
+        return [f for p in self.poem_dirs(d.name) for f in sorted((p / "designs").glob("*.json"))]
+
+    def designs_using_font(self, family):
+        """The design files (any poem) that set text in the family."""
+        key, out = str(family).lower(), []
+        for p in self.poem_dirs():
+            for f in sorted((p / "designs").glob("*.json")):
+                try:
+                    els = json.loads(f.read_text(encoding="utf-8")).get("elements") or []
+                except (OSError, ValueError, AttributeError):
+                    continue
+                if any(isinstance(e, dict) and str(e.get("font") or "").lower() == key for e in els):
+                    out.append(f)
         return out
+
+    def styles_using_font(self, family):
+        """The series, the poems with a look or fonts of their own, and the books ("Books/<folder>") whose type roles
+        (own or through a look) use the family."""
+        key, out = str(family).lower(), []
+        has = lambda style: any(str(f.get("family", "")).lower() == key for f in style["fonts"].values())   # noqa: E731
+        for d in self.series_dirs():
+            meta = self.series_json(d)
+            if has(self.styles.resolve(self.style_levels(meta))):
+                out.append(d.name)
+            for p in self.poem_dirs(d.name):
+                try:
+                    poem = self.load(p)
+                except StoreError:
+                    continue
+                if (poem.get("look") or poem.get("fonts")) and has(self.styles.resolve(self.style_levels(meta, poem))):
+                    out.append(self.pid(p))
+        out += [f"Books/{b['id']}" for b in self.book_styles() if has(b["style"])]
+        return out
+
+    def book_styles(self):
+        """{"id", "title", "style"} for each book in Books/ (next to Poems/) whose book.json can be read."""
+        from .books import Books       # here, not at the top: books imports this module
+        return Books(self.root.parent / "Books").shelf_styles()
+
+    def fonts_in_designs(self):
+        """Lower-cased names of the fonts any design in the library sets text in. Design files are only read again
+        when one was added, removed or changed (path, size and mtime of every designs/*.json)."""
+        files = []
+        for p in self.poem_dirs():
+            for f in (p / "designs").glob("*.json"):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                files.append((str(f), st.st_mtime_ns, st.st_size))
+        sig = tuple(sorted(files))
+        if self._fonts_seen is not None and self._fonts_seen[0] == sig:
+            return set(self._fonts_seen[1])
+        out = set()
+        for path, _, _ in sig:
+            try:
+                els = json.loads(Path(path).read_text(encoding="utf-8")).get("elements") or []
+            except (OSError, ValueError, AttributeError):
+                continue
+            out.update(str(e["font"]).lower() for e in els if isinstance(e, dict) and e.get("font"))
+        self._fonts_seen = (sig, frozenset(out))
+        return out
+
+    def styles_used(self):
+        """Which series, then which books (by title), follow each library palette, look and font:
+        {"palettes": {name: [series or book]}, "looks", "fonts"}."""
+        used = {"palettes": {}, "looks": {}, "fonts": {}}
+        works = [(d.name, self.styles.resolve(self.style_levels(self.series_json(d)))) for d in self.series_dirs()]
+        works += [(b["title"], b["style"]) for b in self.book_styles()]
+        for name, style in works:
+            if style["look"]:
+                used["looks"].setdefault(style["look"], []).append(name)
+            if style["palette"]["linked"] and style["palette"]["name"]:
+                used["palettes"].setdefault(style["palette"]["name"], []).append(name)
+            for fam in dict.fromkeys(f["family"] for f in style["fonts"].values()):
+                used["fonts"].setdefault(fam, []).append(name)
+        return used
+
+    def _palette(self, palette):
+        """What series.json keeps for a palette: a library name (linked), or swatches (its own copy); None for none."""
+        if palette in (None, "", []):
+            return None
+        if isinstance(palette, str):
+            return self.styles.palette(palette)["name"]
+        if isinstance(palette, dict):
+            name = " ".join(palette["name"].split())[:60] if isinstance(palette.get("name"), str) else ""
+            return {**({"name": name} if name else {}), "swatches": styles.clean_swatches(palette.get("swatches"))}
+        return styles.clean_swatches(palette)
 
     # ——— writing ———
     def create(self, title, series=None):
@@ -613,6 +839,14 @@ class Store:
             write_text(path, str(text or "").replace("\r\n", "\n"))
         return self.read(folder)
 
+    def save_posting_notes(self, ref, text):
+        """NOTES.md: how and where the carousel is posted (read() returns it as "notes")."""
+        folder = self.resolve(ref)
+        path = folder / "NOTES.md"
+        if text or path.exists():
+            write_text(path, str(text or "").replace("\r\n", "\n"))
+        return self.read(folder)
+
     def set_status(self, ref, status):
         if status not in STATUSES:
             raise StoreError(f"status must be one of: {', '.join(STATUSES)}")
@@ -638,3 +872,6 @@ class Store:
             clean.append({"concept": s["concept"], **{k: v for k, v in s.items() if k != "concept"}})
         self.update(folder, lambda p: p.__setitem__("slides", clean))
         return clean
+
+
+from . import styles  # noqa: E402  (last: styles imports StoreError and write_text from this module)

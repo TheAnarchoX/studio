@@ -15,14 +15,14 @@ import numpy as np
 from PIL import Image
 
 from .kit import FORMAT_LABEL
-from .store import write_text
+from .store import CHECK_DEFAULTS, write_text
 
 INK = 56            # max channel difference from the plate that counts as ink (about half coverage)
-ALIGN = 1.0         # slide px: edges this close share a column
-NEAR = 10.0         # slide px: an edge this close to a column, but not on it, is a near miss
-PHONE = 430         # px: a phone's width, for the legibility check
-MIN_PHONE = 7.0     # smallest text height (px at phone width) before a warning
-STORY_SAFE = (280, 330)  # 9:16: no text in the top 280 px or the bottom 330 px
+DEFAULT_CHECKS = CHECK_DEFAULTS   # align / near px, phone width, smallest text at phone width, story top / bottom px
+
+
+def _ck(checks):
+    return {**DEFAULT_CHECKS, **(checks or {})}
 
 
 def _load(path):
@@ -84,8 +84,9 @@ def _segments(mask, plate, y0, y1):
     return out
 
 
-def _columns(edges, s):
+def _columns(edges, s, checks=None):
     """edges: [(x_slide_px, row_no)] -> columns (2+ edges within ALIGN of each other) and near misses."""
+    ALIGN, NEAR = _ck(checks)["align"], _ck(checks)["near"]
     cols, cur = [], []
     for x, row in sorted(edges):
         if cur and x - cur[-1][0] > ALIGN:
@@ -108,9 +109,11 @@ def _columns(edges, s):
     return columns, near
 
 
-def _analyse(img, plate, size, scale, story):
+def _analyse(img, plate, size, scale, story, checks=None):
     """Rows, segments, margins and columns of one image measured against its plate."""
     W, H = size
+    ck = _ck(checks)
+    ALIGN = ck["align"]
     if img.shape != plate.shape:
         return {"issues": [{"level": "fail", "text": "image and plate sizes differ"}]}, None
     mask = _diff(img, plate)
@@ -123,8 +126,8 @@ def _analyse(img, plate, size, scale, story):
                 for x0, x1, t, b in _segments(mask, plate, y0, y1)]
         rows.append({"row": i, "top": px(y0), "bottom": px(y1), "segments": segs})
         if story:
-            over_top, over_bot = STORY_SAFE[0] - y0 / scale, y1 / scale - (H - STORY_SAFE[1])
-            for over, where in ((over_top, "top 280"), (over_bot, "bottom 330")):
+            over_top, over_bot = ck["story_top"] - y0 / scale, y1 / scale - (H - ck["story_bottom"])
+            for over, where in ((over_top, f"top {ck['story_top']:g}"), (over_bot, f"bottom {ck['story_bottom']:g}")):
                 if over > 6:
                     issues.append({"level": "fail", "text": f"row {i} reaches {round(over, 1)} px into the story's "
                                    f"{where} px (the story UI covers it)"})
@@ -142,7 +145,7 @@ def _analyse(img, plate, size, scale, story):
              "right": [(s["right"], r["row"]) for r in rows for s in r["segments"]]}
     columns = {}
     for side, e in edges.items():
-        cols, near = _columns(e, scale)
+        cols, near = _columns(e, scale, ck)
         columns[side] = cols
         for n in near:
             issues.append({"level": "warn", "text": f"row {n['row']} {side} edge at {n['x']} is {n['off']} px "
@@ -154,7 +157,8 @@ def _analyse(img, plate, size, scale, story):
             "rows": rows, "columns": columns, "issues": issues}, mask
 
 
-def _legibility(m, size, scale):
+def _legibility(m, size, scale, checks=None):
+    PHONE, MIN_PHONE = _ck(checks)["phone"], _ck(checks)["min_phone"]
     smallest = None
     for r in m.get("rows", []):
         for s in r["segments"]:
@@ -168,12 +172,12 @@ def _legibility(m, size, scale):
         m["issues"].append({"level": "warn", "text": f"{what} is {smallest[0]} px tall at phone width ({PHONE} px)"})
 
 
-def measure(signed, unsigned, size, scale, story=False):
+def measure(signed, unsigned, size, scale, story=False, checks=None):
     """signed / unsigned: (image path, plate path) or None. Returns {True: measures, False: measures}."""
     out, masks = {}, {}
     for key, pair in ((True, signed), (False, unsigned)):
         if pair and Path(pair[0]).exists():
-            out[key], masks[key] = _analyse(_load(pair[0]), _load(pair[1]), size, scale, story)
+            out[key], masks[key] = _analyse(_load(pair[0]), _load(pair[1]), size, scale, story, checks)
     if True in out and False in out and masks[True] is not None and masks[False] is not None:
         a, ma, mb = out[True], masks[True], masks[False]
         boxes = []
@@ -211,7 +215,7 @@ def measure(signed, unsigned, size, scale, story=False):
             a["issues"].append({"level": "warn", "text": f"the layout isn't identical without the name: {what} "
                                 "in the unsigned version"})
     for key, m in out.items():
-        _legibility(m, size, scale)
+        _legibility(m, size, scale, checks)
         for r in m.get("rows", []):
             for s in r["segments"]:
                 s.pop("_box", None)
@@ -236,6 +240,7 @@ def run(store, ref, slides=None, formats=None, workers=4):
     poem = store.load(folder)
     kit = store.kit(folder)
     scale = kit.scale()
+    checks = store.series_meta(folder.parent)["checks"]
     n_all = range(1, len(poem.get("slides") or []) + 1)
     pairs = [(n, r) for r in kit.formats() if not formats or r in formats
              for n in n_all if not slides or n in slides]
@@ -259,7 +264,7 @@ def run(store, ref, slides=None, formats=None, workers=4):
     for n, r in pairs:
         imgs = {sg: kit.png(folder, poem, n, r, sg) for sg in (True, False)}
         got = measure(*[(imgs[sg], plates[(n, r, sg)]) if (n, r, sg) in plates else None for sg in (True, False)],
-                      kit.size(r), scale, story=(r == "916"))
+                      kit.size(r), scale, story=(r == "916"), checks=checks)
         for sg, m in got.items():
             img = imgs[sg]
             report["images"][img.stem] = {"file": img.relative_to(folder).as_posix(), "v": int(img.stat().st_mtime),

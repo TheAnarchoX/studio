@@ -152,8 +152,10 @@ class Kit:
         except BaseException as e:  # noqa: BLE001 — build.py exits on errors
             raise KitError(f"building the page failed: {e}") from None
 
-    def shoot_all(self, jobs, workers=4):
-        """jobs: [(page, n, r, sig '1'|'0', out)] -> shot in parallel, one Chrome profile per worker."""
+    def shoot_all(self, jobs, workers=4, progress=None):
+        """jobs: [(page, n, r, sig '1'|'0', out)] -> shot in parallel, one Chrome profile per worker.
+
+        progress(done, total), when given, is called before the first shot and after each one that's done."""
         if not jobs:
             return []
         mod, pool = self.mod, Queue()
@@ -165,6 +167,9 @@ class Kit:
         dirs = [Path(tempfile.mkdtemp(prefix="studio-chrome-")) for _ in range(max(1, min(workers, len(jobs))))]
         for d in dirs:
             pool.put(d)
+        count, counting = [0], threading.Lock()
+        if progress:
+            progress(0, len(jobs))
 
         def run(job):
             page, n, r, sig, out = job
@@ -173,6 +178,10 @@ class Kit:
                 Path(out).parent.mkdir(parents=True, exist_ok=True)
                 with contextlib.redirect_stdout(sys.stderr):
                     mod.shoot(Path(page), n, r, sig, Path(out), profile)
+                if progress:
+                    with counting:
+                        count[0] += 1
+                        progress(count[0], len(jobs))
                 return out
             except BaseException as e:  # noqa: BLE001 — build.py exits on errors
                 raise KitError(f"{Path(out).name}: {e}") from None
@@ -194,10 +203,11 @@ class Kit:
             raise KitError("; ".join(errors))
         return done
 
-    def render(self, folder: Path, poem, slides=None, formats=None, signed=None, workers=4):
+    def render(self, folder: Path, poem, slides=None, formats=None, signed=None, workers=4, progress=None):
         """Render the chosen slides (1-based numbers), formats (keys) and name variants.
 
         Rebuilds the preview page every time, then the contact sheet from every signed PNG that exists.
+        progress(done, total) follows the shots (see shoot_all).
         """
         folder = Path(folder)
         n_all = list(range(1, len(poem.get("slides") or []) + 1))
@@ -208,7 +218,7 @@ class Kit:
             raise KitError(f"slide must be 1–{len(n_all)}")
         page = self.build_page(folder, poem)
         jobs = [(page, n, r, sig, self.png(folder, poem, n, r, sig == "1")) for r in rs for sig in sigs for n in ns]
-        shot = self.shoot_all(jobs, workers)
+        shot = self.shoot_all(jobs, workers, progress)
         return {"page": page, "images": shot, "sheet": self.contact_sheet(folder, poem)}
 
     def contact_sheet(self, folder: Path, poem):

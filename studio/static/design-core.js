@@ -15,8 +15,6 @@ const Design = (() => {
   };
   const SAFE = {"11": {t: 96, b: 96, s: 88}, "45": {t: 112, b: 112, s: 88}, "916": {t: 280, b: 330, s: 88}};
   const WIDTHS = [[62.5, "Extra condensed"], [75, "Condensed"], [87.5, "Semi condensed"], [100, "Normal"], [112.5, "Semi expanded"], [125, "Expanded"]];
-  const WEIGHTS = {Newsreader: [200, 800], Archivo: [100, 900]};
-  const CAP0 = {Newsreader: .67, Archivo: .686};
   const OPSZ = [6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 72];
   /* Each element keeps its own layout per format: e.at = {"11": {...}, "45": {...}, "916": {...}} overrides these
      keys (anything not overridden comes from the element itself). e.hide = ["916"] leaves it out of a format. */
@@ -28,15 +26,36 @@ const Design = (() => {
   const uid = () => "e" + Date.now().toString(36) + (n++).toString(36);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
+  /* ——— fonts: the families the server knows (/api/fonts), with their files and axes ——— */
+  const TEXT_FONT = "Newsreader";   // text in a family Studio doesn't know is measured in this one
+  let fontList = [], families = new Map();
+  function setFonts(list) {
+    fontList = Array.isArray(list) ? list : [];
+    families = new Map(fontList.map(f => [String(f.family).toLowerCase(), f]));
+    wcache.clear(); ccache.clear(); version++;
+  }
+  const family = name => families.get(String(name ?? "").toLowerCase()) || null;
+  const fontNames = () => fontList.map(f => f.family);
+  const weightsOf = name => { const w = family(name)?.wght; return w ? [w[0], w[1]] : [100, 900]; };
+  /* The named widths (WIDTHS) the family's wdth axis reaches; [] without one. */
+  const widthsOf = name => { const r = family(name)?.wdth; return r ? WIDTHS.filter(([w]) => w >= r[0] && w <= r[1]) : []; };
+  /* Italic only where the family has italics; a family Studio doesn't know is left to the browser. */
+  const italicOf = e => { const f = family(e.font || TEXT_FONT); return !!e.italic && (!f || f.italic); };
+  const stretchOf = e => family(e.font || TEXT_FONT)?.wdth ? (+e.stretch || 100) : 100;
+
   /* ——— metrics: sidebearings + cap height per font instance, from the font files ——— */
   const metrics = new Map(), pending = new Map();
+  /* The same key as metrics.key() in metrics.py: family|italic|weight|width|optical size, rounded so nearby settings share. */
   function mkey(e) {
-    const font = e.font === "Archivo" ? "Archivo" : "Newsreader";
-    const italic = font === "Newsreader" && e.italic ? 1 : 0;
+    const font = family(e.font) ? e.font : TEXT_FONT, F = family(font);
+    const italic = e.italic && (!F || F.italic) ? 1 : 0;
     const weight = Math.round((+e.weight || 400) / 10) * 10;
-    const width = font === "Archivo" ? Math.round((+e.stretch || 100) * 2) / 2 : 100;
-    const s = Math.min(72, Math.max(6, +e.size || 72));
-    const opsz = font === "Newsreader" ? OPSZ.reduce((a, b) => Math.abs(b - s) < Math.abs(a - s) ? b : a) : 0;
+    const width = F?.wdth ? Math.round((+e.stretch || 100) * 2) / 2 : 100;
+    let opsz = 0;
+    if (F?.opsz) {
+      const [lo, hi] = F.opsz, s = Math.min(hi, Math.max(lo, +e.size || 72));
+      opsz = Math.min(hi, Math.max(lo, OPSZ.reduce((a, b) => Math.abs(b - s) < Math.abs(a - s) ? b : a)));
+    }
     return `${font}|${italic}|${weight}|${width}|${opsz}`;
   }
   function loadMetrics(keys) {
@@ -56,7 +75,7 @@ const Design = (() => {
     const m = metrics.get(k);
     if (m) return m;
     if (!pending.has(k)) loadMetrics([k]);
-    return {cap: CAP0[e.font] || .68, g: {}, rough: true};
+    return {cap: family(e.font)?.cap || .68, g: {}, rough: true};
   }
 
   function ensureCss() {
@@ -91,10 +110,10 @@ const Design = (() => {
   }
   const wcache = new Map();
   function fontStyle(st, e, size) {
-    st.fontFamily = `"${e.font || "Newsreader"}"`;
+    st.fontFamily = `"${e.font || TEXT_FONT}"`;
     st.fontWeight = String(e.weight || 400);
-    st.fontStyle = e.italic && e.font !== "Archivo" ? "italic" : "normal";
-    st.fontStretch = (e.font === "Archivo" ? (+e.stretch || 100) : 100) + "%";
+    st.fontStyle = italicOf(e) ? "italic" : "normal";
+    st.fontStretch = stretchOf(e) + "%";
     st.fontSize = size + "px";
     st.letterSpacing = ((+e.tracking || 0) / 1000 * size) + "px";
     st.fontKerning = "normal";
@@ -411,24 +430,39 @@ const Design = (() => {
     return wrap;
   }
 
-  async function ready(d) {
+  /* The design's fonts loaded and the metrics of all its text in. With {wait: false} only the fonts are waited for:
+     the metrics are asked for and onMetrics runs when they arrive (until then text sits on rough cap heights), so a
+     preview or the editor can draw at once and again when they land. The export page always waits. */
+  async function ready(d, {wait = true} = {}) {
     const faces = new Set(['500 40px "Newsreader"', 'italic 400 40px "Newsreader"', '700 40px "Archivo"']);
     const keys = [];
     for (const raw of d?.elements || []) if (raw.type === "text") for (const f of [null, ...Object.keys(raw.at || {})]) {
       const e = f ? resolve(raw, f) : raw;
-      faces.add(`${e.italic && e.font !== "Archivo" ? "italic " : ""}${e.weight || 400} 40px "${e.font || "Newsreader"}"`);
+      faces.add(`${italicOf(e) ? "italic " : ""}${e.weight || 400} 40px "${e.font || TEXT_FONT}"`);
       keys.push(mkey(e));
     }
+    const asked = loadMetrics(keys);
     await Promise.all([...faces].map(f => document.fonts.load(f).catch(() => null)));
     await document.fonts.ready;
     wcache.clear(); ccache.clear();
-    await loadMetrics(keys);
+    if (wait) await asked;
   }
+  /* Loads these faces ('700 40px "Archivo"') when they aren't yet; what was measured before one of them came in may
+     have been measured in a fallback, so it is measured again. */
+  async function loadFaces(faces) {
+    const cold = faces.filter(f => { try { return !document.fonts.check(f); } catch { return true; } });
+    if (!cold.length) return;
+    await Promise.all(cold.map(f => document.fonts.load(f).catch(() => null)));
+    wcache.clear(); ccache.clear();
+  }
+  /* Asks for metrics; waits for them only when `wait`. */
+  const need = (keys, wait) => { const p = loadMetrics(keys); return wait ? p : null; };
 
-  /* Size a text element so its widest line's ink is exactly `width` wide (exact once metrics are in). */
-  async function fitWidth(e, width) {
+  /* Size a text element so its widest line's ink is exactly `width` wide (exact once metrics are in; with
+     {wait: false} it uses the metrics at hand). */
+  async function fitWidth(e, width, {wait = true} = {}) {
     for (let i = 0; i < 3; i++) {
-      await loadMetrics([mkey(e)]);
+      await need([mkey(e)], wait);
       e.size = e.size * width / layout(e).w;
     }
     e.size = Math.round(e.size * 100) / 100;
@@ -459,61 +493,102 @@ const Design = (() => {
     return base;
   }
 
-  /* ——— starting points, made from the series palette ——— */
-  async function starter(kind, _, info) {
-    const {lines: poemLines, palette, format, signature, title} = info;
-    const F = FORMATS[format], S = SAFE[format], m = S.s;
-    const dark = palette[0]?.hex || "#0C0E11", light = palette[1]?.hex || "#EEEAE2";
-    const accent = palette[2]?.hex || "#DA291C", quiet = palette[3]?.hex || "#959AA2";
+  /* ——— colours: what a design takes from a palette ——— */
+  const COLOURS = {background: "#0C0E11", text: "#EEEAE2", accent: "#DA291C", muted: "#959AA2"};
+  /* A palette's background, text, accent and muted colours: each by its role, else the swatch in that place (first
+     to fourth, the order of a palette without roles) when that swatch has no role of its own, else Studio's own.
+     `pal` is a list of swatches ({hex, role?}) or a palette ({swatches}). Starters, new elements and poem cards use it. */
+  function colours(pal, fallback = COLOURS) {
+    const sw = (Array.isArray(pal) ? pal : pal?.swatches) || [];
+    const by = r => sw.find(c => c?.role === r)?.hex;
+    return Object.fromEntries(Object.keys(COLOURS).map((r, i) => [r, by(r) || (sw[i] && !sw[i].role ? sw[i].hex : null) || fallback[r]]));
+  }
+
+  /* ——— type roles: a poem's display, text and label fonts ({family, weight, width?}, as /api/poem's style has them) ——— */
+  const LEGACY = {display: {font: "Archivo", weight: 900}, text: {font: "Newsreader", weight: 500}, label: {font: "Archivo", weight: 700}};
+  /* What a Studio 1.0 series resolves to: its families and weights (any width: the Wall searches widths itself). */
+  const LEGACY_ROLES = {text: ["newsreader", 400], display: ["archivo", 900], label: ["archivo", 700]};
+  /* The element settings for each role. Studio 1.0's pairing (text Newsreader 400, display Archivo 900, label Archivo
+     700, or no roles at all) gives 1.0's own settings, so the starters make exactly what they made in 1.0. */
+  function typeRoles(fonts) {
+    const is10 = r => String(fonts?.[r]?.family || "").toLowerCase() === LEGACY_ROLES[r][0] && (+fonts[r].weight || 400) === LEGACY_ROLES[r][1];
+    if (!fonts || Object.keys(LEGACY_ROLES).every(is10)) return {...LEGACY, legacy: true};
+    const role = r => {
+      const f = fonts[r] || fonts.text || fonts.display, out = {font: f?.family || TEXT_FONT, weight: +f?.weight || 400};
+      if (+f?.width && +f.width !== 100 && family(out.font)?.wdth) out.stretch = +f.width;
+      return out;
+    };
+    return {display: role("display"), text: role("text"), label: role("label"), legacy: false};
+  }
+
+  /* ——— starting points, in the poem's type roles and colours ———
+     opts: {lines, signature, title, fonts (type roles, see typeRoles), colours (see colours) or palette (swatches),
+     safe ({t, b}: the 9:16 story zone from the series' checks), wait (false: lay out with the metrics at hand)}. */
+  async function starter(kind, format, opts) {
+    const {lines: poemLines, signature, title, wait = true} = opts;
+    format = format || opts.format;
+    const F = FORMATS[format], S = {...SAFE[format], ...(opts.safe || {})}, m = S.s;
+    const c = opts.colours || colours(opts.palette);
+    const dark = c.background, light = c.text, accent = c.accent, quiet = c.muted;
+    const T = typeRoles(opts.fonts);
     const text = (poemLines?.length ? poemLines : ["Your poem", "goes here."]).join("\n");
     const d = {name: title || "Design", format, background: dark, elements: []};
-    const name = props => ({id: uid(), type: "text", role: "name", name: "Name", text: signature || "Your name", font: "Archivo", weight: 700,
+    const name = props => ({id: uid(), type: "text", role: "name", name: "Name", text: signature || "Your name", ...T.label,
       size: format === "916" ? 32 : 28, tracking: 260, case: "upper", leading: 1, color: quiet, x: m, y: 0, ...props});
     if (kind === "blank") return d;
-    if (kind === "page") {
-      const poem = {id: uid(), type: "text", name: "Poem", text, font: "Newsreader", weight: 500, size: format === "916" ? 132 : 120,
+    // measured in the role fonts, not in a fallback: 1.0 also signs in Newsreader italic and sets the Field in Archivo 700
+    await loadFaces([T.display, T.text, T.label].map(f => `${f.weight || 400} 40px "${f.font}"`)
+      .concat(T.legacy ? ['italic 400 40px "Newsreader"', '700 40px "Archivo"'] : []));
+    if (kind === "page") {   // the poem in the text face; 1.0 signs it in Newsreader italic, a look in its label face
+      const poem = {id: uid(), type: "text", name: "Poem", text, ...T.text, size: format === "916" ? 132 : 120,
         leading: 1.1, tracking: -12, color: light, accent, x: m + 32, y: 0};
-      await loadMetrics([mkey(poem)]);
-      if (layout(poem).w > F.w - 2 * (m + 32)) await fitWidth(poem, F.w - 2 * (m + 32));
-      const sig = name({font: "Newsreader", italic: true, weight: 400, tracking: 10, case: undefined, size: format === "916" ? 46 : 40, color: quiet, x: poem.x});
-      await loadMetrics([mkey(sig)]);
+      await need([mkey(poem)], wait);
+      if (layout(poem).w > F.w - 2 * (m + 32)) await fitWidth(poem, F.w - 2 * (m + 32), {wait});
+      const sig = T.legacy ? name({font: "Newsreader", italic: true, weight: 400, tracking: 10, case: undefined, size: format === "916" ? 46 : 40, color: quiet, x: poem.x})
+        : name({x: poem.x});
+      await need([mkey(sig)], wait);
       const L = layout(poem), gap = poem.size * .7, total = L.h + gap + layout(sig).h;
       poem.y = S.t + (F.h - S.t - S.b - total) / 2;
       sig.y = poem.y + L.h + gap;
       d.elements.push(poem, sig);
       return d;
     }
-    if (kind === "wall") {   // every line's ink fills the measure; one width for all lines, chosen to fill the height
+    if (kind === "wall") {   // every line's ink fills the measure; with a width axis, one width for all lines, chosen to fill the height
       d.background = accent;
       const rows = text.split("\n").filter(Boolean), W = F.w - 2 * m, gap = format === "916" ? 24 : 18;
       const sig = name({color: dark, size: format === "916" ? 31 : 26});
-      await loadMetrics([mkey(sig)]);
+      await need([mkey(sig)], wait);
       const avail = F.h - S.t - S.b - layout(sig).h - 46;
-      const mk = wd => rows.map(r => ({id: uid(), type: "text", name: r, text: r, font: "Archivo", weight: 900, stretch: wd,
+      const axis = family(T.display.font)?.wdth, range = T.legacy ? [62.5, 125] : axis ? [Math.max(62.5, axis[0]), Math.min(125, axis[1])] : null;
+      const mk = wd => rows.map(r => ({id: uid(), type: "text", name: r, text: r, ...T.display, ...(wd == null ? {} : {stretch: wd}),
         size: 100, leading: 1, tracking: -8, case: "upper", color: dark, x: m, y: 0}));
       const tall = els => els.reduce((a, e) => { const L = layout(e); e.size = e.size * W / L.w; return a + layout(e).capH; }, 0) + gap * (rows.length - 1);
-      let lo = 62.5, hi = 125, els = mk(hi);
-      if (tall(mk(lo)) <= avail) hi = lo;
-      else for (let i = 0; i < 12; i++) { const mid = (lo + hi) / 2; if (tall(mk(mid)) > avail) lo = mid; else hi = mid; }
-      const wd = Math.round(hi * 2) / 2;
-      els = mk(wd);
-      for (const e of els) await fitWidth(e, W);
+      let wd = null;
+      if (range) {
+        let [lo, hi] = range;
+        if (tall(mk(lo)) <= avail) hi = lo;
+        else for (let i = 0; i < 12; i++) { const mid = (lo + hi) / 2; if (tall(mk(mid)) > avail) lo = mid; else hi = mid; }
+        wd = Math.round(hi * 2) / 2;
+      }
+      const els = mk(wd);
+      for (const e of els) await fitWidth(e, W, {wait});
       let sum = els.reduce((a, e) => a + layout(e).capH, 0) + gap * (rows.length - 1);
-      if (sum > avail) { const k = (avail - gap * (rows.length - 1)) / (sum - gap * (rows.length - 1)); for (const e of els) await fitWidth(e, W * k); sum = avail; }
+      if (sum > avail) { const k = (avail - gap * (rows.length - 1)) / (sum - gap * (rows.length - 1)); for (const e of els) await fitWidth(e, W * k, {wait}); sum = avail; }
       let y = S.t + (avail - sum) / 2;
       for (const e of els) { e.y = Math.round(y * 2) / 2; y += layout(e).capH + gap; }
       sig.y = F.h - S.b - layout(sig).h;
       d.elements.push(...els, {id: uid(), type: "rect", name: "Rule", x: m, y: sig.y - 26, w: W, h: format === "916" ? 6 : 5, fill: dark}, sig);
       return d;
     }
-    if (kind === "field") {
-      const poem = {id: uid(), type: "text", name: "Poem", text, font: "Archivo", weight: 700, size: 100, leading: 1.3, tracking: 0, color: light, align: "right", x: 0, y: 0};
-      await fitWidth(poem, F.w * .5);
+    if (kind === "field") {   // 1.0 sets it in Archivo 700, a look in its display face
+      const poem = {id: uid(), type: "text", name: "Poem", text, ...(T.legacy ? {font: "Archivo", weight: 700} : T.display), size: 100, leading: 1.3, tracking: 0,
+        color: light, align: "right", x: 0, y: 0};
+      await fitWidth(poem, F.w * .5, {wait});
       const L = layout(poem), axis = Math.round(F.w * .62);
       poem.x = axis - 28 - L.w;
       poem.y = S.t + (F.h - S.t - S.b - L.h) / 2;
       const sig = name({color: dark, x: axis + 28, size: format === "916" ? 30 : 26});
-      await loadMetrics([mkey(sig)]);
+      await need([mkey(sig)], wait);
       sig.y = F.h - S.b - layout(sig).h;
       d.elements.push({id: uid(), type: "rect", name: "Field", x: axis, y: 0, w: F.w - axis, h: F.h, fill: accent}, poem, sig);
       return d;
@@ -586,11 +661,12 @@ const Design = (() => {
       const wrap = doc.createElement("x-run"), m1 = mk(), m2 = mk();
       node.replaceWith(wrap); wrap.append(m1, node, m2);
       const a = m1.getBoundingClientRect(), b = m2.getBoundingClientRect();
-      const family = s.fontFamily.split(",")[0].replace(/["']/g, "").trim();
+      const known = family(s.fontFamily.split(",")[0].replace(/["']/g, "").trim());   // a family Studio knows stays; others become the text face
       const size = parseFloat(s.fontSize), ls = s.letterSpacing === "normal" ? 0 : parseFloat(s.letterSpacing);
-      const e = {id: uid(), type: "text", text: node.data.replace(/\s+$/, ""), font: family === "Archivo" ? "Archivo" : "Newsreader",
+      const e = {id: uid(), type: "text", text: node.data.replace(/\s+$/, ""), font: known ? known.family : TEXT_FONT,
         weight: parseFloat(s.fontWeight) || 400, size, tracking: Math.round(ls / size * 10000) / 10, leading: 1.15, color: hex(s.color)};
-      if (e.font === "Archivo") e.stretch = parseFloat(s.fontStretch) || 100; else if (s.fontStyle === "italic") e.italic = true;
+      if (family(e.font)?.wdth) e.stretch = parseFloat(s.fontStretch) || 100;
+      if (s.fontStyle === "italic" && italicOf({font: e.font, italic: true})) e.italic = true;
       if (s.textTransform === "uppercase") e.case = "upper"; else if (s.textTransform === "lowercase") e.case = "lower";
       if (info.signature && e.text.toLowerCase() === info.signature.toLowerCase()) { e.role = "name"; e.name = "Name"; }
       const rot = Math.round(Math.atan2(b.top - a.top, b.left - a.left) * 180 / Math.PI * 100) / 100;
@@ -646,7 +722,8 @@ const Design = (() => {
     return d;
   }
 
-  return {FORMATS, SAFE, WIDTHS, WEIGHTS, LAYOUT, uid, layout, bounds, render, thumb, ready, fitWidth, starter, importSlide, mkey, loadMetrics,
+  return {FORMATS, SAFE, WIDTHS, LAYOUT, uid, layout, bounds, render, thumb, ready, fitWidth, starter, importSlide, mkey, loadMetrics,
     resolve, shownIn, pickLayout, remapLayout, mergeFormats, isGrad, cssPaint, stopsOf, firstColor, movePoints, pathD,
+    setFonts, family, fontNames, weightsOf, widthsOf, colours, typeRoles,
     set onMetrics(f) { onMetrics = f; }, get version() { return version; }};
 })();

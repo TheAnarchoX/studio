@@ -1,0 +1,5 @@
+{"name": "Editorial light", "swatches": [
+  {"name": "Paper", "hex": "#F7F5F0", "role": "background"},
+  {"name": "Ink", "hex": "#1A1A1A", "role": "text"},
+  {"name": "Editorial red", "hex": "#C8102E", "role": "accent"},
+  {"name": "Stone", "hex": "#8A857C", "role": "muted"}]}

@@ -9,19 +9,22 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import config, metrics, shoot
-from .store import FONTS, PALETTES, STATUSES, Store, StoreError
+from .books import Books
+from . import config, examples, fonts, home, metrics, routes, shoot, updater
+from .store import STATUSES, Store, StoreError
 
 STATIC = Path(__file__).parent / "static"
 TYPES = {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".md": "text/markdown",
          ".webmanifest": "application/manifest+json", ".ico": "image/x-icon",
          ".json": "application/json", ".png": "image/png", ".ttf": "font/ttf", ".svg": "image/svg+xml"}
+MAX_BODY = 40_000_000  # largest POST body Studio accepts
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -37,15 +40,38 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return host in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8", cache="no-cache"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", cache="no-cache", headers: dict | None = None):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    def _discard_body(self, n):
+        """Read and drop n body bytes, so that closing the socket after the reply does not reset the client."""
+        left = n
+        while left > 0:
+            chunk = self.rfile.read(min(65_536, left))
+            if not chunk:
+                break
+            left -= len(chunk)
+
+    def _reject(self, code, body):
+        """Refuse a POST before its body is used: drain the body first (up to the size limit), then reply."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if n <= MAX_BODY:
+            self._discard_body(n)
+        else:
+            self.close_connection = True
+        return self._send(code, body)
 
     def _file(self, path: Path):
         ctype = TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -59,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             fn()
         except StoreError as e:
-            self._send(400, {"error": str(e)})
+            self._send(getattr(e, "code", 400), {"error": str(e), **(getattr(e, "details", None) or {})})
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass
         except Exception as e:  # noqa: BLE001
@@ -77,7 +103,8 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(url.path)
         s = self.store
         if path in ("/", "/index.html"):
-            return self._file(STATIC / "index.html")
+            html = (STATIC / "index.html").read_text(encoding="utf-8").replace("<html ", f'<html data-theme="{config.THEME}" ', 1)
+            return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
         if path == "/favicon.ico":
             return self._file(STATIC / "icons" / "studio.ico")
         if path == "/api/settings":
@@ -89,12 +116,14 @@ class Handler(BaseHTTPRequestHandler):
             if STATIC.resolve() not in p.parents or not p.is_file():
                 return self._send(404, {"error": "not found"})
             return self._file(p)
-        if path.startswith("/files/"):
+        if path.startswith("/files/"):          # Poems/ only; a book's images are under /bookfiles/ (routes_books)
             return self._file(s.file(path[len("/files/"):]))
         if path in ("/api/home", "/api/poems"):
             poems = s.list()
+            home.use(s)
             return self._send(200, {"series": s.series_list(poems), "statuses": STATUSES, "poems": poems, "signature": config.SIGNATURE,
-                                    "stamp": s.stamp(), "root": str(s.root), "palettes": PALETTES, "fonts": FONTS})
+                                    "stamp": s.stamp(), "root": str(s.root), **home_styles(s),
+                                    **home.overview()})
         if path == "/api/series":
             return self._send(200, s.series_read(q.get("name", "")))
         if path == "/api/design":
@@ -108,7 +137,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"stamp": s.stamp(s.resolve(q["id"]))})
             if q.get("series"):
                 return self._send(200, {"stamp": s.stamp_series(s.series_dir(q["series"]))})
-            return self._send(200, {"stamp": s.stamp()})
+            return self._send(200, {"stamp": s.stamp(), "books": Books(config.BOOKS).stamp()})
+        # The route tables come after the built-in paths here, and before them in _post. Nothing relies on the order:
+        # no table path is also a built-in one (a test in test_web checks that), so either order answers the same.
+        if path in routes.GET:
+            return routes.GET[path](self, q)
+        for prefix, fn in routes.PREFIX_GET:
+            if path.startswith(prefix):
+                return fn(self, path[len(prefix):], q)
         self._send(404, {"error": "not found"})
 
     # ——— POST ———
@@ -119,17 +155,20 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         origin = self.headers.get("Origin")
         if origin and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
-            return self._send(403, {"error": "wrong origin"})
+            return self._reject(403, {"error": "wrong origin"})
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
-            return self._send(415, {"error": "send JSON"})
+            return self._reject(415, {"error": "send JSON"})
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 40_000_000:
-            return self._send(413, {"error": "too large"})
+        if n > MAX_BODY:
+            self.close_connection = True  # the body is not read; tell the client the connection ends here
+            return self._send(413, {"error": "too large"}, headers={"Connection": "close"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._send(400, {"error": "bad JSON"})
         s, path = self.store, urlparse(self.path).path
+        if path in routes.POST:      # before the built-in paths; see the note in _get
+            return routes.POST[path](self, body)
         if path == "/api/poems":
             return self._send(200, s.create(body.get("title"), body.get("series")))
         if path == "/api/text":
@@ -142,13 +181,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if path == "/api/settings":
             fields = {k: v for k, v in body.items() if k in config.DEFAULTS}
+            if "library" in fields and not str(fields["library"] or "").strip():
+                raise StoreError("choose a folder")
+            if body.get("create") or "library" in fields:
+                # make (or check) the folders before anything is written: a failure leaves the config untouched
+                lib = Path(os.environ.get("STUDIO_ART") or str(fields.get("library") or config.load()["library"]).strip()).expanduser()
+                try:
+                    if body.get("create"):
+                        (lib / "Poems").mkdir(parents=True, exist_ok=True)
+                    elif lib.exists() and not lib.is_dir():
+                        raise OSError("not a folder")
+                except OSError:
+                    raise StoreError(f"Studio can't create a folder at {lib}.") from None
+            before = config.ART
             try:
                 config.save(fields)
             except ValueError as e:
                 raise StoreError(str(e)) from None
-            if body.get("create") and not config.POEMS.exists():
-                config.POEMS.mkdir(parents=True)
             Handler.store = Store()
+            if config.ART != before:          # another library: its own fonts, and the computer's indexed for them
+                fonts.registry().start_system_index()
             return self._send(200, settings_info())
         if path == "/api/reveal":   # show a file in the system's file manager
             target = s.file(body.get("rel", ""))
@@ -168,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, s.set_status(body.get("id"), body.get("status")))
         if path == "/api/series":
             return self._send(200, s.create_series(body.get("name"), body.get("tagline", ""),
-                                                   body.get("palette"), body.get("description", "")))
+                                                   body.get("palette"), body.get("description", ""), look=body.get("look")))
         if path == "/api/series/update":
             return self._send(200, s.update_series(body.get("name"), body.get("fields") or {}))
         if path == "/api/design":
@@ -199,13 +251,33 @@ class StudioServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+def home_styles(s: Store):
+    """The library's palettes in Studio 1.0's shape, {name: [[swatch, hex], ...]}, the default look's palette first (the
+    New series dialog preselects the first); the looks; and the font families."""
+    looks = s.styles.looks()
+    default = next((lk["palette"] for lk in looks if lk["name"].lower() == config.DEFAULT_LOOK.lower()), None)
+    palettes = sorted(s.styles.palettes(), key=lambda p: p["name"] != default)
+    return {"palettes": {p["name"]: [[c.get("name") or c["hex"], c["hex"]] for c in p["swatches"]] for p in palettes},
+            "looks": looks, "fonts": [fam.name for fam in fonts.registry().families()]}
+
+
 def settings_info():
     lib = config.ART
     poems = config.POEMS
     series = [d for d in Store().series_dirs()] if poems.exists() else []
+    env_library = bool(os.environ.get("STUDIO_ART"))
+    if series and not env_library and not config.CONFIG_FILE.exists():
+        # a library from before Studio 1.1, which had no settings file: kept as the setting (STUDIO_ART is not one);
+        # the page still loads when the file can't be written
+        try:
+            config.save({"library": str(lib)})
+        except OSError:
+            pass
     return {"settings": config.load(), "config_file": str(config.CONFIG_FILE), "library": str(lib),
             "library_exists": lib.exists(), "poems_exists": poems.exists(), "series": len(series),
-            "env_library": bool(os.environ.get("STUDIO_ART")), "chrome_found": config.CHROME}
+            "env_library": env_library, "chrome_found": config.CHROME,
+            "first_run": not series and not config.CONFIG_FILE.exists(),      # no welcome over work that is already there
+            "has_examples": bool(poems.exists() and examples.example_dirs(Store()))}
 
 
 def cli_command():
@@ -248,6 +320,8 @@ def serve(open_browser=False, host=None, port=None, store=None, quiet=False):
         return
     if not quiet:
         print(f"Studio: {url}  (poems in {Handler.store.root})  Ctrl+C to stop", file=sys.stderr)
+    threading.Thread(target=updater.check, daemon=True).start()
+    fonts.registry().start_system_index()      # cached on disk, so cheap after the first time
     if open_browser:
         webbrowser.open(url)
     try:
@@ -256,3 +330,6 @@ def serve(open_browser=False, host=None, port=None, store=None, quiet=False):
         pass
     finally:
         httpd.server_close()
+
+
+from . import routes_books, routes_making, routes_styles, routes_update  # noqa: F401,E402

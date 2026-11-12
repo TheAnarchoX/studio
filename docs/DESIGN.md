@@ -18,8 +18,9 @@ making. This page explains the moving parts for anyone changing the code.
 ## Files
 
 ```
+Styles/                          looks/, palettes/, fonts/<Family>/, rules.md (the library's styles)
 Poems/<Series>/
-  series.json                    tagline, description, palette, fonts, signature, formats
+  series.json                    tagline, description, palette, fonts, signature, formats, checks
   README.md, CONCEPTS.md         rules and concept catalogue (read by Claude)
   _kit/                          the series' renderer (optional, see KITS.md; Studio never edits it)
   stamps/<slug>.json             reusable layers for the Design tab
@@ -44,6 +45,97 @@ Poems/<Series>/
   snapshots its existing text first.
 - `poem.json` is written in a compact, hand-editable style (one slide per line).
 - Deleting moves things to `Poems/.trash/`.
+
+Books live next to `Poems/`:
+
+```
+Books/<Book>/
+  book.json                      title, kind, features, order (front, body, back), goals; unknown keys are kept
+  manuscript/<piece>.md          one Markdown file per piece
+  images/, sources.json          images used in the text, the bibliography (CSL-JSON)
+  .studio/days.json              words written per day (the daily goal)
+  drafts/<piece>/<stamp>.md      snapshots
+  editions/<date name>/          frozen copies
+  exports/                       .docx, Markdown, zip
+Books/.trash/                    deleted books and pieces
+```
+
+## Route tables
+
+`studio/routes.py` holds the web API as tables: `@routes.get(path)`, `@routes.post(path)` and
+`@routes.get_prefix(prefix)` register handlers in `routes_*.py` (`routes_update`, `routes_styles`,
+`routes_making`, `routes_books`). `Handler` in `web.py` dispatches to them, so every endpoint keeps the Host check, and every
+POST the Origin and JSON-only checks. Handlers reply with `h._send` and raise `StoreError` for a 400.
+
+## Books
+
+- **Store:** `studio/books.py` reads and writes the folders above (atomic writes, `folder_name(title)` for folder and
+  file names, piece history, editions, search and replace across a book). A save carries the file's mtime and gets a
+  409 when the file changed since, so a piece open in an editor is never overwritten under the cursor.
+- **Manuscript dialect:** plain Pandoc-compatible Markdown with a few extensions (notes `^[...]`, citations `[@key]`,
+  spans `[text]{.idx}` and `{.comment}`, `:::` blocks for epigraph, poem, linked poem and page break). It has one
+  implementation, `studio/manuscript.py`, built on `markdown-it-py` and `mdit-py-plugins`, which parses to and
+  serializes from a document tree and normalises everything to one canonical form. The dialect's table is in the
+  books spec.
+- **Import and export:** `book_import.py` (.docx through `mammoth`, then into the dialect; Markdown files) and
+  `book_export.py` (.docx with `python-docx`, Markdown).
+- **API:** `routes_books.py`: `/api/books`, `/api/book`, `/api/book/piece`, `.../history`, `.../restore`, `.../edition`,
+  `.../export` (a POST: it also writes a dated copy into `exports/`), `.../search`, `.../replace`, `.../sources`,
+  `.../image`, `.../import`; a book's images are served under `/bookfiles/<book>/images/<name>`.
+- **Writing window** (plain scripts, loaded after `app.js`): `book.js` (the shelf, book settings, the page frame),
+  `book-schema.js` (the ProseMirror schema for the dialect), `book-text.js` (the text column: marks, `/` menu,
+  notes in the margin, citations), `book-editor.js` (the list of pieces, piece loading and saving),
+  `book-rail.js` (outline, sources, history, comments, find) and `book-tools.js` (the second pane, command palette,
+  focus mode, style-sheet checks, echo finder, counts).
+- **Vendored editor:** ProseMirror is bundled into one file, `static/vendor/prosemirror.js`, which is committed;
+  there is no build step at runtime. Rebuild it only when you change `tools/vendor-entry.js` or
+  `tools/package.json`; the steps are in CONTRIBUTING.md.
+
+## Updates
+
+`studio/updater.py` asks the GitHub releases API once a day (never raises, retries after an hour on error) and
+compares versions. `install_kind()` is `frozen`, `source` (a git checkout) or `package`. Applying an update
+pulls and runs `pip install` for a source install; a frozen Windows build downloads
+`Studio-windows-x64.zip` and swaps its files after the app exits, then restarts. Requests carry only
+`User-Agent: Studio/<version>`. The endpoints are in `routes_update.py`; the UI is Settings → Updates and the
+Info page.
+
+## Fonts
+
+`studio/fonts.py` is the font registry: one entry per family, read from the font files (axes, cap height,
+licence, whether embedding is allowed). Sources, first wins: the library's `Styles/fonts/<Family>/` (your own
+files and added Google Fonts, with an optional `family.json`), the bundled families in `static/fonts` described
+by `families.json`, and fonts installed on the computer (indexed on demand). The registry writes the
+`@font-face` rules (`/api/fonts.css`), serves files (`/fonts/...`) and tells `metrics.py` which file a text
+layer uses. `save_design` refuses families the registry doesn't know.
+
+## Styles and inheritance
+
+`studio/styles.py` holds palettes, looks and house rules. Starters are bundled in `static/styles`; the library's
+own are `Styles/palettes/<name>.json`, `Styles/looks/<name>.json` and `Styles/rules.md`. An own file with a
+starter's name replaces it, and deleting that copy brings the starter back. A palette is named swatches, some
+with a role (background, text, accent, muted); a look is a palette by name plus a font per role (display, text,
+label).
+
+Style resolves through levels: global, series, poem. A level may set a look, a palette (a name links to the
+library; a list of swatches is an own copy) and fonts per role. What a level doesn't set, or names but the
+library lacks, comes from the level above. **Detach** copies the inherited value into the level, **Link**
+removes it again. 1.0 data (`series.json` palette lists, `voice`/`command` fonts) still reads. A series also
+carries its own design checks (QA thresholds), and designs honour the series' formats. Endpoints are in
+`routes_styles.py`; the UI is `static/styles.js`.
+
+## Home and welcome
+
+`studio/home.py` gathers recent items from SOURCES (callables returning `{kind, title, where, when, href}`)
+and picks the one to continue. `static/home.js` draws it. A new install shows `static/welcome.js`, which can
+add the Examples series from `studio/examples.py` (marked `"example": true`; removing moves it to `.trash`).
+
+## Making carousels in the app
+
+`studio/making.py` is the one place for rendering and measuring a kit's carousel: the Art tab (through
+`routes_making.py`) and the MCP `render` and `qa` tools both call it. The Art tab chooses slides from the
+series' concepts, writes the brief and posting notes, renders with progress, and runs QA. One job per poem runs
+at a time.
 
 ## Carousels
 
@@ -80,15 +172,18 @@ The report goes back to Claude and is saved as `qa.json`; the Art tab shows a li
 
 ## Web server
 
-- Binds 127.0.0.1 only, checks the Host and Origin headers, accepts JSON-only writes, and confines file paths to
-  the `Poems` folder.
-- The front end is plain JavaScript without a build step: `app.js` (pages), `editor.js` (Design tab),
+- Binds 127.0.0.1 only, checks the Host and Origin headers, accepts JSON-only writes, and confines file paths:
+  `/files/` serves only from the `Poems` folder, `/bookfiles/` only images of real books in `Books`.
+- The front end is plain JavaScript without a build step: `app.js` (pages), the `book*.js` files (books), `editor.js` (Design tab),
   `design-core.js` (the renderer shared with exports), `menu.js` (context menus).
 
 ## Desktop
 
 `studio/desktop.py` opens a pywebview window (WebView2, WebKit, or GTK/Qt) with Studio's icon and starts the
-server in the same process unless one is running. Without a native backend it falls back to a Chrome app window,
+server in the same process unless one is running. On Windows it starts WebView2 with `--accept-lang`: the language of
+Settings → Spelling (`spelling` in the config: `auto`, the newest book's language, or a language tag) comes first,
+because WebView2 checks spelling in the first language only, in the whole window. Without a native backend it falls back to a Chrome app window,
 then the browser. `studio install` adds a launcher; on Windows the shortcut carries an AppUserModelID, so the
-window groups under a pinned taskbar icon. `packaging/studio.spec` builds `Studio.exe` (windowed) and
+window groups under a pinned taskbar icon. `tools/design_regression.py` exports every design of a library
+and compares pixels and metrics, for changes to the renderer or fonts. `packaging/studio.spec` builds `Studio.exe` (windowed) and
 `studio-cli.exe` (console, for MCP) with PyInstaller.

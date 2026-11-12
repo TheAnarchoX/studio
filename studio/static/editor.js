@@ -46,20 +46,68 @@ const Editor = (() => {
   const TOOLS = [["select", "Select", "V"], ["text", "Text", "T"], ["rect", "Rectangle", "R"], ["ellipse", "Ellipse", "O"], ["polygon", "Polygon (triangle)", "Y"],
     ["star", "Star", "S"], ["line", "Line", "L"], ["arc", "Arc: drag from start to end, then set its bend", "A"], ["pen", "Pen: click for corners, drag for curves, click the first point to close, Enter to finish", "P"]];
   ICON.path = ICON.pen; ICON.shape = ICON.polygon;
-  const STARTERS = [["blank", "Blank", "An empty artboard in the series' dark."], ["page", "Page", "The poem as written, signed like a poem."],
+  const STARTERS = [["blank", "Blank", "An empty artboard in the series' background colour."], ["page", "Page", "The poem as written, signed like a poem."],
     ["wall", "Wall", "Every line stretched to the full measure, on the accent."], ["field", "Field", "An accent field, the poem flush against its edge."]];
 
-  let root = null, host = null, poem = null, api = null, toast = null, back = "#/";
-  let designs = [], slug = null, d = null, loadedAt = null;
+  let root = null, host = null, poem = null, api = null, toast = null, back = "#/", refresh = null, editStyle = null;
+  let designs = [], slug = null, d = null, loadedAt = null, remapped = false;   // remapped: opened in another format than the file says
   let anchor = null, inGroup = null, collapsed = new Set(), pen = null, editPts = null;
   let sel = [], tool = "select", view = {z: 1, x: 0, y: 0, auto: true}, guides = pref.get("guides", "1") === "1", signedPreview = true;
   let undo = [], redo = [], lastKey = null, lastTime = 0, dirty = false, saving = null, saveTimer = null, clip = null;
   let canvas, cx, stage, world, board, ro, drag = null, snapLines = [], hover = null, space = false, raf = 0, cursor = null;
 
   const F = () => Design.FORMATS[d.format] || Design.FORMATS["45"];
-  const S = () => Design.SAFE[d.format] || Design.SAFE["45"];
-  const palette = () => poem.series_info?.palette || [{name: "Night", hex: "#0C0E11"}, {name: "Paper", hex: "#EEEAE2"}, {name: "Red", hex: "#DA291C"}];
-  const fonts = () => (poem.series_info?.fonts || [{family: "Newsreader"}, {family: "Archivo"}]).map(f => f.family);
+  /* The series decides which formats a design has here; the design file keeps every format's layout either way. */
+  const SERIES_KEY = {"1:1": "11", "4:5": "45", "9:16": "916"};
+  const allowed = () => {
+    const want = (poem.series_info?.formats || []).map(f => SERIES_KEY[f]).filter(Boolean);
+    const keys = Object.keys(Design.FORMATS).filter(k => want.includes(k));
+    return keys.length ? keys : Object.keys(Design.FORMATS);
+  };
+  const shownFormat = f => allowed().includes(f) ? f : allowed()[0];   // what a design saved in a left-out format opens as
+  const formatEntries = () => allowed().map(k => [k, Design.FORMATS[k]]);
+  /* The safe margins; on 9:16 the top and bottom are the series' story zone (its design checks). */
+  const safeOf = fmt => {
+    const s = Design.SAFE[fmt] || Design.SAFE["45"], c = poem.series_info?.checks;
+    return fmt === "916" && c ? {...s, t: c.story_top ?? s.t, b: c.story_bottom ?? s.b} : s;
+  };
+  const S = () => safeOf(d.format);
+  /* The palette the poem resolves to (its own, its series', or a look's). */
+  const palette = () => poem.style?.palette?.swatches || poem.series_info?.palette || [{name: "Night", hex: "#0C0E11"}, {name: "Paper", hex: "#EEEAE2"}, {name: "Red", hex: "#DA291C"}];
+  /* Its background, text, accent and muted colours (by role), and its type roles as element settings: what starters and new elements use. */
+  const colours = () => Design.colours(palette());
+  const roles = () => Design.typeRoles(poem.style?.fonts);
+  /* The poem's fonts (its resolved display, text and label families), then every other family Studio knows. */
+  const styleFonts = () => {
+    const roles = poem.style?.fonts;
+    if (roles) return [...new Set(["display", "text", "label"].map(r => roles[r]?.family).filter(Boolean))];
+    return (poem.series_info?.fonts || [{family: "Newsreader"}, {family: "Archivo"}]).map(f => f.family);
+  };
+  const fonts = () => [...new Set([...styleFonts(), ...Design.fontNames()])];
+  const textFont = () => poem.style?.fonts?.text?.family || fonts()[0] || "Newsreader";   // the poem and new text
+  const CATEGORIES = [["serif", "Serif"], ["sans", "Sans serif"], ["display", "Display"], ["mono", "Monospace"], ["hand", "Handwriting"]];
+  /* The font select's options: the poem's fonts ("This series", or "This poem" when it has its own), then every other
+     family by category, then the computer's own fonts. A font Studio doesn't have stays listed as not installed. */
+  function fontOptions(cur) {
+    const first = styleFonts(), all = Design.fontNames(), rest = all.filter(n => !first.includes(n)).sort((a, b) => a.localeCompare(b));
+    const sys = n => Design.family(n)?.source === "system", cat = n => Design.family(n)?.category;
+    const own = Object.values(poem.style?.fonts || {}).some(f => f.from === "poem");
+    const groups = [[own ? "This poem" : "This series", first],
+      ...CATEGORIES.map(([c, l]) => [l, rest.filter(n => !sys(n) && cat(n) === c)]),
+      ["Other", rest.filter(n => !sys(n) && !CATEGORIES.some(([c]) => c === cat(n)))], ["On this computer", rest.filter(sys)]];
+    const opt = n => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`;
+    return (cur && !first.includes(cur) && !all.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)} (not installed)</option>` : "")
+      + groups.filter(([, ns]) => ns.length).map(([l, ns]) => `<optgroup label="${esc(l)}">${ns.map(opt).join("")}</optgroup>`).join("");
+  }
+  /* A new font keeps what it can of the old setting: weight within its range, width and italic only if it has them. */
+  const hasItalics = font => { const f = Design.family(font || "Newsreader"); return !f || f.italic; };   // unknown: up to the browser
+  const setFont = (e, v) => {
+    e.font = v;
+    const w = Design.weightsOf(v);
+    e.weight = Math.max(w[0], Math.min(w[1], e.weight || 400));
+    if (!Design.widthsOf(v).length) delete e.stretch;
+    if (!hasItalics(v)) delete e.italic;
+  };
   const LAYOUT = new Set(Design.LAYOUT), views = new WeakMap();
   /* The editor works on views: layout (position, size, type size…) belongs to the current format only;
      content, colours and roles are shared by all formats. */
@@ -190,6 +238,7 @@ const Editor = (() => {
   /* ——— mount / data ——— */
   async function mount(el, opts) {
     host = el; poem = opts.poem; api = opts.api; toast = opts.toast; back = opts.back || "#/";
+    refresh = opts.refresh || null; editStyle = opts.editStyle || null;   // refresh(fresh poem): the app takes it in and calls update()
     root = document.createElement("div");
     root.className = "edx";
     document.body.appendChild(root);
@@ -209,9 +258,11 @@ const Editor = (() => {
     try {
       const nd = await api(`/api/design?id=${encodeURIComponent(poem.id)}&d=${encodeURIComponent(s)}`);
       nd.elements ||= []; nd.elements.forEach(e => { e.id ||= Design.uid(); });
-      d = nd; slug = s; loadedAt = designs.find(x => x.slug === s)?.updated; pref.set("last." + poem.id, s);
+      if (!allowed().includes(nd.format)) { const to = allowed()[0]; fillFormat(nd, nd.format || "45", to); nd.format = to; nd.__remapped = true; }   // the series left that format out
+      remapped = nd.__remapped === true; delete nd.__remapped; d = nd; slug = s; loadedAt = designs.find(x => x.slug === s)?.updated; pref.set("last." + poem.id, s);
       sel = []; undo = []; redo = []; dirty = false; view.auto = true; docSeen = [];
-      await Design.ready(d);
+      Design.onMetrics = null;            // shell() sets it: metrics that land before then are simply used by the first paint
+      await Design.ready(d, {wait: false});   // the fonts; the editor opens at once and repaints when the metrics land
       shell(); fit(); paint(); panels();
     } catch (e) { toast(e.message, true); hub(); }
   }
@@ -236,7 +287,7 @@ const Editor = (() => {
       loadedAt = mine.updated;
       api(`/api/design?id=${encodeURIComponent(poem.id)}&d=${encodeURIComponent(slug)}`).then(async nd => {
         nd.elements ||= []; nd.elements.forEach(e => { e.id ||= Design.uid(); });
-        d = nd; sel = sel.filter(id => byId(id)); await Design.ready(d); paint(); panels(); toast("Design updated on disk");
+        d = nd; sel = sel.filter(id => byId(id)); await Design.ready(d, {wait: false}); paint(); panels(); toast("Design updated on disk");
       }).catch(() => {});
     }
     panels();
@@ -281,15 +332,15 @@ const Editor = (() => {
   /* ——— hub: your designs + new ones ——— */
   function hub() {
     d = null; ro?.disconnect(); ro = null; board = null;
-    const fmt = pref.get("fmt", "45"), info = startInfo(fmt), art = poem.art || {};
+    const fmt = allowed().includes(pref.get("fmt", "45")) ? pref.get("fmt", "45") : allowed()[0], info = startInfo(fmt), art = poem.art || {};
     const kit = art.formats?.[fmt]?.slides?.filter(x => x.signed) || [];
     root.innerHTML = `${bar(`<span class="edx-spacer"></span><span class="edx-hint">Designs live in <b>${esc(poem.folder)}/designs</b></span>`)}
       <div class="edx-hub"><div class="edx-hub-in">
         <div class="edx-hub-top"><div><span class="label">${esc(poem.series)} · ${esc(poem.title)}</span><h1 class="display edx-hub-title">Design</h1></div>
-          <div class="seg" id="st-fmt" aria-label="Format">${Object.entries(Design.FORMATS).map(([k, f]) => `<button data-f="${k}" aria-pressed="${k === fmt}">${f.label}</button>`).join("")}</div></div>
+          <div class="seg" id="st-fmt" aria-label="Format">${formatEntries().map(([k, f]) => `<button data-f="${k}" aria-pressed="${k === fmt}">${f.label}</button>`).join("")}</div></div>
         ${designs.length ? `<section><div class="edx-hub-head"><span class="label">Your designs · ${designs.length}</span></div>
           <div class="edx-cards">${designs.map(x => `<button class="edx-card" data-open="${esc(x.slug)}"><span class="cv" data-cv="${esc(x.slug)}"></span>
-            <span class="n">${esc(x.name)}</span><span class="d">${esc(Design.FORMATS[x.format]?.label || "")} · ${plural(x.elements, "layer")}${Object.keys(x.exports || {}).length ? " · exported" : ""}</span></button>`).join("")}</div></section>` : ""}
+            <span class="n">${esc(x.name)}</span><span class="d">${esc(Design.FORMATS[shownFormat(x.format)]?.label || "")} · ${plural(x.elements, "layer")}${Object.keys(x.exports || {}).length ? " · exported" : ""}</span></button>`).join("")}</div></section>` : ""}
         ${kit.length ? `<section><div class="edx-hub-head"><span class="label">From the carousel · open a slide as an editable design</span></div>
           <div class="edx-cards">${kit.map(x => `<button class="edx-card" data-import="${x.n}"><img src="/files/${x.signed.split("/").map(encodeURIComponent).join("/")}?v=${x.signed_v}" alt="">
             <span class="n">${esc(x.name)}</span><span class="d">Slide ${x.n} · ${Design.FORMATS[fmt].label}</span></button>`).join("")}</div></section>` : ""}
@@ -308,18 +359,27 @@ const Editor = (() => {
       ]);
     });
     $$("[data-import]", root).forEach(b => b.onclick = () => importFromCarousel(+b.dataset.import, fmt, b));
+    /* Thumbnails are drawn at once with the metrics at hand, then again exactly once they are in. */
+    const swap = (node, dd) => {
+      if (!node.isConnected) return node;
+      const t = Design.thumb(dd, (node.getBoundingClientRect().width || 242) - 2);
+      node.replaceWith(t);
+      return t;
+    };
     (async () => {
-      await Design.ready(null);
+      await Design.ready(null, {wait: false});
       for (const span of $$("[data-thumb]", root)) {
-        const dd = await Design.starter(span.dataset.thumb, null, info);
-        await Design.ready(dd);
-        if (span.isConnected) span.replaceWith(Design.thumb(dd, (span.getBoundingClientRect().width || 242) - 2));
+        const dd = await Design.starter(span.dataset.thumb, null, {...info, wait: false});
+        await Design.ready(dd, {wait: false});
+        const rough = swap(span, dd);
+        Design.starter(span.dataset.thumb, null, info).then(async x => { await Design.ready(x); swap(rough, x); }).catch(() => {});
       }
       for (const span of $$("[data-cv]", root)) {
         try {
           const dd = await api(`/api/design?id=${encodeURIComponent(poem.id)}&d=${encodeURIComponent(span.dataset.cv)}`);
-          await Design.ready(dd);
-          if (span.isConnected) span.replaceWith(Design.thumb(dd, (span.getBoundingClientRect().width || 242) - 2));
+          await Design.ready(dd, {wait: false});
+          const rough = swap(span, dd);
+          Design.ready(dd).then(() => swap(rough, dd)).catch(() => {});
         } catch { /* keep the placeholder */ }
       }
     })();
@@ -362,8 +422,8 @@ const Editor = (() => {
     } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
   }
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  const startInfo = fmt => ({F: Design.FORMATS[fmt], format: fmt, lines: poem.lines, palette: palette(),
-    signature: poem.series_info?.signature, title: poem.title});
+  const startInfo = fmt => ({F: Design.FORMATS[fmt], format: fmt, lines: poem.lines, colours: colours(), fonts: poem.style?.fonts,
+    safe: safeOf(fmt), signature: poem.series_info?.signature, title: poem.title});
 
   /* ——— the editor ——— */
   function shell() {
@@ -372,7 +432,7 @@ const Editor = (() => {
           <button class="edx-icon" id="ed-menu" title="Designs" aria-haspopup="true">${svg(ICON.caret, 16)}</button>
           <div class="edx-pop" id="ed-pop" hidden></div></div>
         <span class="edx-spacer"></span>
-        <div class="seg edx-seg" id="ed-fmt" aria-label="Format">${Object.entries(Design.FORMATS).map(([k, f]) => `<button data-fmt="${k}">${f.label}</button>`).join("")}</div>
+        <div class="seg edx-seg" id="ed-fmt" aria-label="Format">${formatEntries().map(([k, f]) => `<button data-fmt="${k}">${f.label}</button>`).join("")}</div>
         <span class="edx-spacer"></span>
         <div class="edx-group"><button class="edx-icon" id="ed-guides" title="Guides: safe zones and centre lines (G)">${svg(ICON.guides)}</button>
           <div class="seg edx-seg" id="ed-sig" aria-label="Name"><button data-sig="1">Name</button><button data-sig="0">No name</button></div></div>
@@ -443,7 +503,7 @@ const Editor = (() => {
     ev?.stopPropagation();
     const pop = $("#ed-pop", root);
     if (!pop.hidden) { pop.hidden = true; return; }
-    pop.innerHTML = `<div class="edx-pop-list">${designs.map(x => `<button data-go="${esc(x.slug)}" class="${x.slug === slug ? "on" : ""}"><span>${esc(x.name)}</span><em>${Design.FORMATS[x.format]?.label || ""}</em></button>`).join("")}</div>
+    pop.innerHTML = `<div class="edx-pop-list">${designs.map(x => `<button data-go="${esc(x.slug)}" class="${x.slug === slug ? "on" : ""}"><span>${esc(x.name)}</span><em>${Design.FORMATS[shownFormat(x.format)]?.label || ""}</em></button>`).join("")}</div>
       <div class="edx-pop-acts"><button data-act="hub">All designs · new…</button><button data-act="dup">Duplicate</button><button data-act="del" class="bad">Move to trash</button></div>`;
     pop.hidden = false;
     $$("[data-go]", pop).forEach(b => b.onclick = () => { pop.hidden = true; flush(); if (b.dataset.go !== slug) load(b.dataset.go); });
@@ -498,15 +558,23 @@ const Editor = (() => {
   const toScreen = (x, y) => ({x: view.x + x * view.z, y: view.y + y * view.z});
 
   /* ——— painting ——— */
+  /* chrome colours on the overlay follow the theme (the design underneath keeps its own) */
+  const ink = {red: "#DA291C", handle: "#EEEAE2", onRed: "#0C0E11", fog: "#8E939B"};
+  function readInk() {
+    const st = getComputedStyle(document.documentElement), v = (n, d) => st.getPropertyValue(n).trim() || d;
+    ink.red = v("--red", ink.red); ink.handle = v("--handle", ink.handle); ink.onRed = v("--night", ink.onRed); ink.fog = v("--fog", ink.fog);
+  }
+  const tint = a => { const n = parseInt(ink.red.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
   function paint() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paintNow(); }); }
   function paintNow() {
     if (!d || !cx || !root || !board) return;
+    readInk();
     const dpr = devicePixelRatio || 1, f = F(), s = S(), z = view.z;
     world.style.transform = `translate(${view.x}px,${view.y}px) scale(${z})`;
     Design.render(board, d, {signed: signedPreview, format: d.format});
     cx.setTransform(dpr, 0, 0, dpr, 0, 0);
     cx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-    cx.font = '600 11px "Archivo"'; cx.letterSpacing = "1.5px"; cx.fillStyle = "#8E939B"; cx.textBaseline = "alphabetic";
+    cx.font = '600 11px "Archivo"'; cx.letterSpacing = "1.5px"; cx.fillStyle = ink.fog; cx.textBaseline = "alphabetic";
     cx.fillText(`${d.name.toUpperCase()}  ·  ${f.label}`, Math.round(view.x), Math.round(view.y - 12));
     cx.letterSpacing = "0px";
     cx.save(); cx.translate(view.x, view.y); cx.scale(z, z);
@@ -525,9 +593,9 @@ const Editor = (() => {
       else { const b = Design.bounds(e); rotateAround(cx, e, b); cx.strokeRect(b.x, b.y, b.w, b.h); }
       cx.restore();
     };
-    if (hover && !sel.includes(hover) && byId(hover)) outline(byId(hover), "rgba(218,41,28,.6)", 1);
-    for (const e of selected()) outline(e, "#DA291C", 1.5);
-    cx.strokeStyle = "#DA291C"; cx.lineWidth = 1 / z;
+    if (hover && !sel.includes(hover) && byId(hover)) outline(byId(hover), tint(.6), 1);
+    for (const e of selected()) outline(e, ink.red, 1.5);
+    cx.strokeStyle = ink.red; cx.lineWidth = 1 / z;
     for (const l of snapLines) { cx.beginPath(); if (l.x != null) { cx.moveTo(l.x, -4000); cx.lineTo(l.x, f.h + 4000); } else { cx.moveTo(-4000, l.y); cx.lineTo(f.w + 4000, l.y); } cx.stroke(); }
     cx.restore();
     if (sel.length === 1 && !drag?.creating) {
@@ -537,11 +605,11 @@ const Editor = (() => {
         const p = toScreen(h.x, h.y);
         if (h.h === "rot") {
           const c = toScreen(h.cx, h.cy);
-          cx.strokeStyle = "rgba(218,41,28,.7)"; cx.beginPath(); cx.moveTo(c.x, c.y); cx.lineTo(p.x, p.y); cx.stroke();
-          cx.fillStyle = "#DA291C"; cx.beginPath(); cx.arc(p.x, p.y, 5, 0, Math.PI * 2); cx.fill();
+          cx.strokeStyle = tint(.7); cx.beginPath(); cx.moveTo(c.x, c.y); cx.lineTo(p.x, p.y); cx.stroke();
+          cx.fillStyle = ink.red; cx.beginPath(); cx.arc(p.x, p.y, 5, 0, Math.PI * 2); cx.fill();
           continue;
         }
-        cx.fillStyle = "#EEEAE2"; cx.strokeStyle = "#DA291C";
+        cx.fillStyle = ink.handle; cx.strokeStyle = ink.red;
         cx.fillRect(p.x - 4.5, p.y - 4.5, 9, 9); cx.strokeRect(p.x - 4.5, p.y - 4.5, 9, 9);
       }
       const b = Design.bounds(e), at = toScreen(b.x + b.w / 2, b.y + b.h);
@@ -550,11 +618,11 @@ const Editor = (() => {
     }
     const pe = pen ? byId(pen.id) : editPts ? byId(editPts) : null;
     if (pe?.pts?.length) {
-      cx.save(); cx.translate(view.x, view.y); cx.scale(z, z); cx.lineWidth = 1 / z; cx.strokeStyle = "#DA291C";
+      cx.save(); cx.translate(view.x, view.y); cx.scale(z, z); cx.lineWidth = 1 / z; cx.strokeStyle = ink.red;
       cx.stroke(new Path2D(Design.pathD(pe.pts, pe.closed))); cx.restore();
       if (pen && cursor && !drag) {
         const last = pe.pts.at(-1), a = toScreen(last.x, last.y), o = toScreen(last.ox ?? last.x, last.oy ?? last.y), c2 = toScreen(cursor.x, cursor.y);
-        cx.setLineDash([4, 3]); cx.strokeStyle = "rgba(218,41,28,.85)"; cx.lineWidth = 1;
+        cx.setLineDash([4, 3]); cx.strokeStyle = tint(.85); cx.lineWidth = 1;
         cx.beginPath(); cx.moveTo(a.x, a.y); cx.bezierCurveTo(o.x, o.y, c2.x, c2.y, c2.x, c2.y); cx.stroke(); cx.setLineDash([]);
       }
       cx.lineWidth = 1;
@@ -562,21 +630,21 @@ const Editor = (() => {
         const a = toScreen(q.x, q.y);
         for (const [kx, ky] of [["ix", "iy"], ["ox", "oy"]]) if (q[kx] != null) {
           const h = toScreen(q[kx], q[ky]);
-          cx.strokeStyle = "rgba(218,41,28,.8)"; cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(h.x, h.y); cx.stroke();
-          cx.fillStyle = "#DA291C"; cx.beginPath(); cx.arc(h.x, h.y, 3.5, 0, Math.PI * 2); cx.fill();
+          cx.strokeStyle = tint(.8); cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(h.x, h.y); cx.stroke();
+          cx.fillStyle = ink.red; cx.beginPath(); cx.arc(h.x, h.y, 3.5, 0, Math.PI * 2); cx.fill();
         }
-        cx.fillStyle = "#EEEAE2"; cx.strokeStyle = "#DA291C"; cx.fillRect(a.x - 3.5, a.y - 3.5, 7, 7); cx.strokeRect(a.x - 3.5, a.y - 3.5, 7, 7);
+        cx.fillStyle = ink.handle; cx.strokeStyle = ink.red; cx.fillRect(a.x - 3.5, a.y - 3.5, 7, 7); cx.strokeRect(a.x - 3.5, a.y - 3.5, 7, 7);
       }
     }
     if (drag?.marquee && drag.rect) {
       const a = toScreen(drag.rect.x, drag.rect.y), b = toScreen(drag.rect.x + drag.rect.w, drag.rect.y + drag.rect.h);
-      cx.fillStyle = "rgba(218,41,28,.08)"; cx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
-      cx.strokeStyle = "#DA291C"; cx.lineWidth = 1; cx.strokeRect(a.x + .5, a.y + .5, b.x - a.x, b.y - a.y);
+      cx.fillStyle = tint(.08); cx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      cx.strokeStyle = ink.red; cx.lineWidth = 1; cx.strokeRect(a.x + .5, a.y + .5, b.x - a.x, b.y - a.y);
     }
     if (inGroup && members(inGroup).length) {   // inside a group: show the group's box faintly
       const bs = members(inGroup).map(id => Design.bounds(byId(id))), x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
       const a = toScreen(x0, y0), b = toScreen(Math.max(...bs.map(b => b.x + b.w)), Math.max(...bs.map(b => b.y + b.h)));
-      cx.setLineDash([4, 3]); cx.strokeStyle = "rgba(218,41,28,.7)"; cx.lineWidth = 1; cx.strokeRect(a.x - 4.5, a.y - 4.5, b.x - a.x + 9, b.y - a.y + 9); cx.setLineDash([]);
+      cx.setLineDash([4, 3]); cx.strokeStyle = tint(.7); cx.lineWidth = 1; cx.strokeRect(a.x - 4.5, a.y - 4.5, b.x - a.x + 9, b.y - a.y + 9); cx.setLineDash([]);
     }
     if (drag?.move && sel.length) {
       const bs = selected().map(e => Design.bounds(e)), x = Math.min(...bs.map(b => b.x)), y = Math.min(...bs.map(b => b.y));
@@ -587,8 +655,8 @@ const Editor = (() => {
   function badge(txt, x, y) {
     cx.font = '600 11px "Archivo"'; cx.textBaseline = "middle";
     const w = cx.measureText(txt).width + 14;
-    cx.fillStyle = "#DA291C"; cx.fillRect(Math.round(x - w / 2), Math.round(y), Math.round(w), 20);
-    cx.fillStyle = "#0C0E11"; cx.fillText(txt, Math.round(x - w / 2 + 7), Math.round(y + 10.5));
+    cx.fillStyle = ink.red; cx.fillRect(Math.round(x - w / 2), Math.round(y), Math.round(w), 20);
+    cx.fillStyle = ink.onRed; cx.fillText(txt, Math.round(x - w / 2 + 7), Math.round(y + 10.5));
     cx.textBaseline = "alphabetic";
   }
   function rotateAround(c, e, b) {
@@ -860,10 +928,10 @@ const Editor = (() => {
     return [{x: r2(a.x), y: r2(a.y), ox: r2(a.x + nx), oy: r2(a.y + ny)}, {x: r2(b.x), y: r2(b.y), ix: r2(b.x + nx), iy: r2(b.y + ny)}];
   }
   function startCreate(p) {
-    const pal = palette(), light = pal[1]?.hex || "#EEEAE2", accent = pal[2]?.hex || "#DA291C";
+    const {text: light, accent} = colours();
     const x = round(p.x), y = round(p.y), before = JSON.stringify(d);
     let e;
-    if (tool === "text") e = {type: "text", text: "Text", font: fonts()[0] || "Newsreader", weight: 500, size: 96, leading: 1.15, tracking: 0, color: light, x, y};
+    if (tool === "text") e = {type: "text", text: "Text", font: textFont(), weight: 500, size: 96, leading: 1.15, tracking: 0, color: light, x, y};
     else if (tool === "line") e = {type: "line", x1: x, y1: y, x2: x, y2: y, stroke: accent, width: 6};
     else if (tool === "arc") e = {type: "path", name: "Arc", arc: true, bend: .5, pts: arcPts({x, y}, {x, y}, .5), closed: false, fill: null, stroke: accent, sw: 6};
     else if (tool === "polygon" || tool === "star") e = {type: "shape", kind: tool, n: tool === "star" ? 5 : 3, ...(tool === "star" ? {inner: .45} : {}), x, y, w: 0, h: 0, fill: accent};
@@ -900,10 +968,10 @@ const Editor = (() => {
 
   /* ——— the pen ——— */
   function penDown(p) {
-    const pal = palette();
+    const {accent} = colours();
     if (pen && !byId(pen.id)) pen = null;
     if (!pen) {
-      const e = {id: Design.uid(), type: "path", name: "Path", pts: [{x: round(p.x), y: round(p.y)}], closed: false, fill: null, stroke: pal[2]?.hex || "#DA291C", sw: 4};
+      const e = {id: Design.uid(), type: "path", name: "Path", pts: [{x: round(p.x), y: round(p.y)}], closed: false, fill: null, stroke: accent, sw: 4};
       pen = {id: e.id, before: JSON.stringify(d)};
       d.elements.push(e); sel = [e.id]; editPts = null;
       drag = {penHandle: true, id: e.id, i: 0};
@@ -912,7 +980,7 @@ const Editor = (() => {
     const e = byId(pen.id), first = e.pts[0], s0 = toScreen(first.x, first.y);
     if (e.pts.length > 2 && Math.hypot(s0.x - p.sx, s0.y - p.sy) < 9) {   // back at the start: close the shape
       e.closed = true;
-      if (!e.fill) e.fill = pal[2]?.hex || "#DA291C";
+      if (!e.fill) e.fill = accent;
       drag = {penHandle: true, id: e.id, i: 0, closing: true};
       return;
     }
@@ -936,17 +1004,17 @@ const Editor = (() => {
 
   /* ——— commands ——— */
   async function insertPoem() {
-    const pal = palette(), s = S(), f = F();
-    const e = {id: Design.uid(), type: "text", name: "Poem", text: poem.lines.join("\n") || "Your poem", font: fonts()[0] || "Newsreader", weight: 500,
-      size: 96, leading: 1.1, tracking: -12, color: pal[1]?.hex || "#EEEAE2", accent: pal[2]?.hex, x: s.s, y: s.t};
+    const c = colours(), s = S(), f = F();
+    const e = {id: Design.uid(), type: "text", name: "Poem", text: poem.lines.join("\n") || "Your poem", ...roles().text,
+      size: 96, leading: 1.1, tracking: -12, color: c.text, accent: c.accent, x: s.s, y: s.t};
     await Design.loadMetrics([Design.mkey(e)]);
     if (Design.layout(e).w > f.w - 2 * s.s) await Design.fitWidth(e, f.w - 2 * s.s);
     mutate(() => { d.elements.push(e); sel = [e.id]; }); panels();
   }
   async function insertName() {
-    const pal = palette(), s = S(), f = F();
+    const s = S(), f = F();
     const e = {id: Design.uid(), type: "text", role: "name", name: "Name", text: poem.series_info?.signature || "Your name",
-      font: "Archivo", weight: 700, size: 28, tracking: 260, case: "upper", leading: 1, color: pal[3]?.hex || pal[1]?.hex || "#959AA2", x: s.s, y: 0};
+      ...roles().label, size: 28, tracking: 260, case: "upper", leading: 1, color: colours().muted, x: s.s, y: 0};
     await Design.loadMetrics([Design.mkey(e)]);
     e.y = f.h - s.b - Design.layout(e).h;
     mutate(() => { d.elements.push(e); sel = [e.id]; }); panels();
@@ -1019,10 +1087,10 @@ const Editor = (() => {
     ];
   }
   function addLayerMenu() {
-    const pal = palette(), f = F(), cxm = f.w / 2, cym = f.h / 2, accent = pal[2]?.hex || "#DA291C", light = pal[1]?.hex || "#EEEAE2";
+    const {text: light, accent} = colours(), f = F(), cxm = f.w / 2, cym = f.h / 2;
     const add = e => { e.id = Design.uid(); mutate(() => { d.elements.push(e); sel = [e.id]; inGroup = null; }); panels(); if (e.type === "text") setTimeout(() => { $("#p-text", root)?.focus(); $("#p-text", root)?.select(); }); };
     return [
-      {label: "Text", kbd: "T", act: () => add({type: "text", text: "Text", font: fonts()[0] || "Newsreader", weight: 500, size: 120, leading: 1.15, tracking: 0, color: light, x: cxm - 160, y: cym - 40})},
+      {label: "Text", kbd: "T", act: () => add({type: "text", text: "Text", font: textFont(), weight: 500, size: 120, leading: 1.15, tracking: 0, color: light, x: cxm - 160, y: cym - 40})},
       {label: "Rectangle", kbd: "R", act: () => add({type: "rect", x: cxm - 200, y: cym - 150, w: 400, h: 300, fill: accent})},
       {label: "Ellipse", kbd: "O", act: () => add({type: "ellipse", x: cxm - 200, y: cym - 200, w: 400, h: 400, fill: accent})},
       {label: "Triangle", kbd: "Y", act: () => add({type: "shape", kind: "polygon", n: 3, x: cxm - 200, y: cym - 175, w: 400, h: 350, fill: accent})},
@@ -1044,12 +1112,13 @@ const Editor = (() => {
       "-",
       {label: "Fit to screen", kbd: "Shift+1", act: () => { fit(); paint(); }},
       {label: "Guides", kbd: "G", checked: guides, act: () => { guides = !guides; pref.set("guides", guides ? "1" : "0"); paint(); }},
-      {label: "Format", items: Object.entries(Design.FORMATS).map(([k, f]) => ({label: f.label, checked: k === d.format, act: () => setFormat(k)}))},
+      {label: "Format", items: formatEntries().map(([k, f]) => ({label: f.label, checked: k === d.format, act: () => setFormat(k)}))},
       {label: "Preview", items: [{label: "With name", checked: signedPreview, act: () => { signedPreview = true; paint(); }}, {label: "Without name", checked: !signedPreview, act: () => { signedPreview = false; paint(); }}]},
       "-",
       {label: "Export PNGs", act: exportPng},
       {label: "Duplicate this design", act: duplicateDesign},
       {label: "All designs…", act: () => { flush(); hub(); }},
+      ...(editStyle ? ["-", {label: "Poem style…", act: editStyle}] : []),
     ];
   }
   function onCtx(ev) {
@@ -1184,20 +1253,22 @@ const Editor = (() => {
     panels();
   }
 
+  /* First visit to a format: start each layer where it sits relative to the safe area; after that, formats are separate. */
+  function fillFormat(doc, from, fmt) {
+    for (const raw of doc.elements) {
+      const r = Design.resolve(raw, from);
+      raw.at ||= {};
+      raw.at[from] ||= Design.pickLayout(r);
+      if (!raw.at[fmt]) raw.at[fmt] = Design.remapLayout(r, from, fmt);
+    }
+  }
+
   function setFormat(fmt) {
-    if (fmt === d.format) return;
+    if (fmt === d.format || !allowed().includes(fmt)) return;
     const from = d.format;
     const fresh = d.elements.filter(raw => !raw.at?.[fmt]);
     if (fresh.length) {
-      mutate(() => {   // first visit: start each layer where it sits relative to the safe area; after that, formats are separate
-        for (const raw of d.elements) {
-          const r = Design.resolve(raw, from);
-          raw.at ||= {};
-          raw.at[from] ||= Design.pickLayout(r);
-          if (!raw.at[fmt]) raw.at[fmt] = Design.remapLayout(r, from, fmt);
-        }
-        d.format = fmt;
-      });
+      mutate(() => { fillFormat(d, from, fmt); d.format = fmt; });
     } else { d.format = fmt; scheduleSave(); }
     sel = sel.filter(id => shown(byId(id)));
     view.auto = true; fit(); paint(); panels();
@@ -1221,6 +1292,7 @@ const Editor = (() => {
   }
 
   async function exportPng() {
+    if (remapped) { dirty = true; remapped = false; }     // the export renders the file: write what the editor showed
     await save(); if (saving) await saving;
     const btn = $("#ed-export", root);
     btn.disabled = true; btn.textContent = "Exporting…";
@@ -1276,7 +1348,7 @@ const Editor = (() => {
 
   /* ——— keyboard ——— */
   function onKey(ev) {
-    if (!root?.isConnected) return;
+    if (!root?.isConnected || document.querySelector("dialog[open]")) return;    // a dialog over the editor has the keys
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
     const k = ev.key, mod = ev.ctrlKey || ev.metaKey;
     if (!d) return;
@@ -1417,10 +1489,67 @@ const Editor = (() => {
   }
   let docSeen = [];   // first-use order of the open design's colours; reset in load()
   const swatchRow = (key, cur, allowNone = false) => `<div class="edx-sw">${allowNone ? `<button class="none ${!cur ? "on" : ""}" data-sw="${key}" data-v="" title="None">⌀</button>` : ""}${
-    palette().map(c => `<button class="${(cur || "").toUpperCase() === c.hex.toUpperCase() ? "on" : ""}" data-sw="${key}" data-v="${esc(c.hex)}" title="${esc(c.name)} ${esc(c.hex)}" style="--c:${esc(c.hex)}"></button>`).join("")}${
-    documentColours(d, palette(), docSeen).map(c => `<button class="doc ${(cur || "").toUpperCase() === c ? "on" : ""}" data-sw="${key}" data-v="${c}" title="${c} · in this design" style="--c:${c}"></button>`).join("")}
+    palette().map(c => `<button class="${(cur || "").toUpperCase() === c.hex.toUpperCase() ? "on" : ""}" data-sw="${key}" data-v="${esc(c.hex)}" title="${esc(c.name)} ${esc(c.hex)}${c.role ? " · " + esc(c.role) : ""}" style="--c:${esc(c.hex)}"></button>`).join("")}${
+    documentColours(d, palette(), docSeen).map(c => `<span class="docw"><button class="doc ${(cur || "").toUpperCase() === c ? "on" : ""}" data-sw="${key}" data-v="${c}" data-doc="${c}" title="${c} · in this design" style="--c:${c}"></button><button class="add" type="button" data-addpal="${c}" title="Add ${c} to the palette" aria-label="Add ${c} to the palette" aria-haspopup="menu">+</button></span>`).join("")}
     <label class="custom" title="Another colour"><input type="color" data-color="${key}" value="${esc(cur && /^#[0-9a-f]{6}$/i.test(cur) ? cur : "#888888")}"></label>
     ${cur ? `<span class="hex">${esc(cur.toUpperCase())}</span>` : ""}</div>`;
+
+  /* Add to palette: a document colour joins the palette the poem resolves to, optionally taking a role from another
+     swatch. A poem's or series' own copy changes at once; a palette linked from the library asks first. */
+  const ROLE_NAMES = ["background", "text", "accent", "muted"];
+  function docMenu(hex) {
+    const sw = poem.style?.palette?.swatches || palette(), full = sw.length >= 16, holder = r => sw.find(s => s.role === r);
+    return [
+      {label: full ? "Add to palette (it has 16 colours)" : "Add to palette", disabled: full, act: () => addToPalette(hex)},
+      ...ROLE_NAMES.map(r => ({label: `Add as ${r}${holder(r) ? ` (instead of ${holder(r).name || holder(r).hex})` : ""}`, disabled: full, act: () => addToPalette(hex, r)})),
+      "-",
+      {label: `Copy ${hex}`, act: () => { navigator.clipboard?.writeText(hex); toast(`Copied ${hex}`); }},
+    ];
+  }
+  async function addToPalette(hex, role = "") {
+    const pal = poem.style?.palette;
+    if (!pal) return;
+    const swatches = [...pal.swatches.map(s => ({name: s.name || s.hex, hex: s.hex, ...(s.role && s.role !== role ? {role: s.role} : {})})),
+      {name: hex, hex, ...(role ? {role} : {})}];
+    const copy = pal.name ? {name: pal.name, swatches} : swatches;     // an unnamed copy stays a plain list, as Studio 1.0 wrote it
+    const level = pal.from === "poem" ? "poem" : "series";
+    try {
+      let where;
+      if (!pal.linked && level === "poem") { await api("/api/poem/style", {id: poem.id, palette: copy}); where = "this poem's palette"; }
+      else if (!pal.linked) { await api("/api/series/style", {name: poem.series, palette: copy}); where = `the palette of ${poem.series}`; }
+      else {
+        const how = await askLibrary(pal, hex, level);
+        if (!how) return;
+        if (how === "library") { await api("/api/styles/palette", {palette: {name: pal.name, swatches}}); where = `the palette ${pal.name}`; }
+        else if (level === "poem") { await api("/api/poem/style", {id: poem.id, palette: copy}); where = "this poem's own palette"; }
+        else { await api("/api/series/style", {name: poem.series, palette: copy}); where = `${poem.series}'s own copy of ${pal.name}`; }   // the look and fonts stay
+      }
+      const fresh = await api(`/api/poem?id=${encodeURIComponent(poem.id)}`);
+      if (refresh) refresh(fresh); else update(fresh);
+      toast(`Added ${hex} to ${where}`);
+    } catch (e) { toast(e.message, true); }
+  }
+  /* A library palette: change it everywhere, or give the series (or the poem, when it chose the palette) its own copy. */
+  async function askLibrary(pal, hex, level) {
+    let users = [];
+    try { users = (await api("/api/styles")).used?.palettes?.[pal.name] || []; } catch { /* the count is only a courtesy */ }
+    const n = users.length;
+    return new Promise(resolve => {
+      let how = null;
+      const form = openDialog(`<form class="ask">
+        <div class="ask-head"><i style="background:${esc(hex)}"></i><h2>Add ${esc(hex)} to the palette</h2></div>
+        <p class="hint ask-lede">${level === "poem" ? "This poem uses" : `${esc(poem.series)} uses`} “${esc(pal.name)}”, a palette in your library.</p>
+        <div class="ask-opts">
+          <button type="submit" class="choice" data-how="library"><b>Change the library palette “${esc(pal.name)}”${n ? ` (used by ${n} series)` : ""}</b>
+            <span>${n ? `${esc(users.join(", "))} ${n === 1 ? "gets" : "get"} the colour too.` : "Everything that follows it gets the colour."}</span></button>
+          <button type="submit" class="choice" data-how="own"><b>Give ${level === "poem" ? "this poem" : "this series"} its own copy</b>
+            <span>${level === "poem" ? "The poem keeps its own copy of the palette, with the colour added. Nothing else changes."
+              : `${esc(poem.series)} keeps its own copy of the palette, with the colour added. Its look and fonts stay as they are.`}</span></button></div>
+        <div class="foot"><span></span><button type="button" class="btn quiet" data-close autofocus>Cancel</button></div></form>`, async () => resolve(how));
+      $$("[data-how]", form).forEach(b => b.onclick = () => { how = b.dataset.how; });
+      $("#dlg").addEventListener("close", () => resolve(null), {once: true});    // Cancel or Esc (after an answer: no effect)
+    });
+  }
   const stopSel = {};
   const hexToRgb = h => [1, 3, 5].map(i => parseInt(String(h).slice(i, i + 2), 16));
   const mix = (a, b, t) => "#" + hexToRgb(a).map((v, i) => Math.round(v + (hexToRgb(b)[i] - v) * t).toString(16).padStart(2, "0")).join("").toUpperCase();
@@ -1454,7 +1583,7 @@ const Editor = (() => {
     const clone = v => JSON.parse(JSON.stringify(v));
     const put = (k, v, key) => mutate(() => set(k, v), key);
     $$("[data-pmode]", el).forEach(b => b.onclick = () => {
-      const [k, m] = b.dataset.pmode.split("|"), cur = get(k), basec = Design.firstColor(cur) || palette()[2]?.hex || "#DA291C";
+      const [k, m] = b.dataset.pmode.split("|"), cur = get(k), basec = Design.firstColor(cur) || colours().accent;
       let v = null;
       if (m === "solid") v = basec;
       else if (m === "linear" || m === "radial") {
@@ -1470,6 +1599,11 @@ const Editor = (() => {
       if (live) paint(); else props();
     };
     $$("[data-sw]", el).forEach(b => b.onclick = () => color(b.dataset.sw, b.dataset.v || null));
+    $$("[data-doc]", el).forEach(b => b.oncontextmenu = ev => StudioMenu.open(ev, docMenu(b.dataset.doc)));
+    $$("[data-addpal]", el).forEach(b => b.onclick = () => {
+      const r = b.getBoundingClientRect();
+      StudioMenu.open({preventDefault() {}, stopPropagation() {}, clientX: r.left, clientY: r.bottom + 4}, docMenu(b.dataset.addpal));
+    });
     $$("[data-color]", el).forEach(i => { i.oninput = () => color(i.dataset.color, i.value.toUpperCase(), true); i.onchange = () => props(); });
     $$("[data-gbar]", el).forEach(bar => {
       const key = bar.dataset.gbar, track = $(".track", bar);
@@ -1560,7 +1694,7 @@ const Editor = (() => {
       $("#g-name", el) && ($("#g-name", el).onchange = e2 => { mutate(() => { (d.groups ||= {})[g0] = {...(d.groups[g0] || {}), name: e2.target.value.trim() || "Group"}; }); panels(); });
       return;
     }
-    const e = es[0], b = Design.bounds(e), weights = Design.WEIGHTS[e.font] || [100, 900];
+    const e = es[0], b = Design.bounds(e), weights = Design.weightsOf(e.font), widths = Design.widthsOf(e.font), italics = hasItalics(e.font);
     const acts = `<span class="edx-acts"><button class="edx-icon sm" data-act="dup" title="Duplicate (Ctrl+D)">${svg(ICON.copy, 16)}</button>
       <button class="edx-icon sm" data-act="delete" title="Delete (Del)">${svg(ICON.trash, 16)}</button></span>`;
     let html = "";
@@ -1568,17 +1702,17 @@ const Editor = (() => {
       : e.type === "shape" ? label({...e, name: ""}) : e.type === "path" ? "Path" : "Line";
     html += sec(kind, `<input class="edx-in" data-k="name" value="${esc(e.name || "")}" placeholder="${esc(label({...e, name: ""}))}" aria-label="Layer name">
       <label class="edx-check edx-namechk"><input type="checkbox" data-k="role" ${e.role === "name" ? "checked" : ""}> <span><b>Name</b> · part of the signature, left out of the unsigned version</span></label>
-      <div class="edx-field"><span>Show in</span><div class="seg edx-seg small">${Object.entries(Design.FORMATS).map(([k, f]) =>
+      <div class="edx-field"><span>Show in</span><div class="seg edx-seg small">${formatEntries().map(([k, f]) =>
         `<button data-show="${k}" aria-pressed="${!(e.hide || []).includes(k)}" title="${(e.hide || []).includes(k) ? "Show" : "Hide"} this layer in ${f.label}">${f.label}</button>`).join("")}</div></div>
       ${maskInfo(e)}`, acts);
     if (e.type === "text") {
       html += sec("Text", `<textarea class="edx-in edx-text" id="p-text" rows="${Math.min(9, String(e.text).split("\n").length + 1)}" spellcheck="true">${esc(e.text)}</textarea>`);
-      html += sec("Type", `<div class="edx-grid2"><label class="edx-field"><span>Font</span><select class="edx-in" data-k="font">${fonts().map(f => `<option ${f === e.font ? "selected" : ""}>${esc(f)}</option>`).join("")}</select></label>
+      html += sec("Type", `<div class="edx-grid2"><label class="edx-field"><span>Font</span><select class="edx-in" data-k="font">${fontOptions(e.font || "Newsreader")}</select></label>
           ${num("weight", "Weight", e.weight || 400, 10, `min="${weights[0]}" max="${weights[1]}"`)}</div>
         <div class="edx-grid3">${num("size", "Size", round(e.size), .5, 'min="1"')}${num("leading", "Leading", e.leading ?? 1.15, .01)}${num("tracking", "Tracking", e.tracking || 0, 5)}</div>
-        <div class="edx-grid2">${e.font === "Archivo" ? `<label class="edx-field"><span>Width</span><select class="edx-in" data-k="stretch">${Design.WIDTHS.map(([w, n]) =>
-            `<option value="${w}" ${Math.abs((e.stretch || 100) - w) < 1 ? "selected" : ""}>${n.replace("-", " ")}</option>`).join("")}</select></label>`
-          : `<label class="edx-field"><span>Style</span><select class="edx-in" data-k="italic"><option value="">Roman</option><option value="1" ${e.italic ? "selected" : ""}>Italic</option></select></label>`}
+        <div class="edx-grid${widths.length && italics ? 3 : 2}">${widths.length ? `<label class="edx-field"><span>Width</span><select class="edx-in" data-k="stretch">${widths.map(([w, n]) =>
+            `<option value="${w}" ${Math.abs((e.stretch || 100) - w) < 1 ? "selected" : ""}>${n.replace("-", " ")}</option>`).join("")}</select></label>` : ""}
+          ${italics ? `<label class="edx-field"><span>Style</span><select class="edx-in" data-k="italic"><option value="">Roman</option><option value="1" ${e.italic ? "selected" : ""}>Italic</option></select></label>` : ""}
           <label class="edx-field"><span>Case</span><select class="edx-in" data-k="case"><option value="">As typed</option><option value="upper" ${e.case === "upper" ? "selected" : ""}>UPPER</option><option value="lower" ${e.case === "lower" ? "selected" : ""}>lower</option></select></label></div>
         <div class="edx-field"><span>Lines</span><div class="seg edx-seg small">${["left", "center", "right"].map(a => `<button data-k="align" data-v="${a}" aria-pressed="${(e.align || "left") === a}">${a}</button>`).join("")}</div></div>`);
       html += sec("Colour", `<div class="edx-field"><span>Letters</span>${paintCtl("color", e.color || "#EEEAE2")}</div><div class="edx-field"><span>Full stops</span>${paintCtl("accent", e.accent || null, true)}</div>`);
@@ -1601,7 +1735,7 @@ const Editor = (() => {
     const raw = e.__raw;
     const posVal = (f, k) => { const r = Design.resolve(raw, f); if (k === "x" || k === "y") { const bb = Design.bounds(r); return round(k === "x" ? bb.x : bb.y); } return round(+r[k] || 0); };
     html += sec("Position", `<div class="edx-pos" style="--cols:${cols.length}"><span></span>${cols.map(c => `<span class="h">${c[1]}</span>`).join("")}
-      ${Object.entries(Design.FORMATS).map(([f, F2]) => `<span class="f ${f === d.format ? "on" : ""} ${Design.shownIn(raw, f) ? "" : "off"}" title="${f === d.format ? "The format you're editing" : "Edit " + F2.label + " here, or switch to it"}">${F2.label}</span>${
+      ${formatEntries().map(([f, F2]) => `<span class="f ${f === d.format ? "on" : ""} ${Design.shownIn(raw, f) ? "" : "off"}" title="${f === d.format ? "The format you're editing" : "Edit " + F2.label + " here, or switch to it"}">${F2.label}</span>${
         cols.map(([k]) => `<input class="${f === d.format ? "on" : ""}" type="number" step=".5" data-pos="${f}|${k}" value="${posVal(f, k)}" aria-label="${F2.label} ${k}">`).join("")}`).join("")}</div>
       <p class="edx-note">Each format keeps its own layout: moving or sizing in ${F().label} leaves the others alone.</p>
       ${e.type !== "line" ? `<div class="edx-grid2">${num("rotation", "Rotate", e.rotation || 0, 1)}</div>` : ""}`);
@@ -1622,7 +1756,7 @@ const Editor = (() => {
         else if (["size", "leading", "tracking", "weight", "width", "rotation", "stretch", "w", "h", "x1", "y1", "x2", "y2", "sw"].includes(k)) { if (v === "" || isNaN(+v)) return; e[k] = +v; }
         else if (k === "x" || k === "y") { if (v === "" || isNaN(+v)) return; const bb = Design.bounds(e); e[k] = +v - (k === "x" ? bb.x - e.x : bb.y - e.y); }
         else if (k === "case") { if (v) e.case = v; else delete e.case; }
-        else if (k === "font") { e.font = v; const w = Design.WEIGHTS[v] || [100, 900]; e.weight = Math.max(w[0], Math.min(w[1], e.weight || 400)); if (v !== "Archivo") delete e.stretch; if (v !== "Newsreader") delete e.italic; }
+        else if (k === "font") setFont(e, v);
         else if (k === "name") { if (v.trim()) e.name = v.trim(); else delete e.name; }
         else e[k] = v;
       }, k + ":" + e.id);
@@ -1678,9 +1812,10 @@ const Editor = (() => {
     const sel1 = (k, opts, cur) => `<select class="edx-in" data-mk="${k}">${cur == null ? `<option value="">mixed</option>` : ""}${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(cur) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
     if (es.every(e => e.type === "text")) {
       const f = same("font"), c = same("case"), st = same("stretch"), al = same("align");
-      return sec(`Type · ${es.length} text layers`, `<div class="edx-grid2"><label class="edx-field"><span>Font</span>${sel1("font", fonts().map(x => [x, x]), f ? f.v || "Newsreader" : null)}</label>${nv("weight", "Weight", 10)}</div>
+      const widthsAll = Design.WIDTHS.filter(([w]) => es.every(e => Design.widthsOf(e.font).some(x => x[0] === w)));   // widths every layer's font has
+      return sec(`Type · ${es.length} text layers`, `<div class="edx-grid2"><label class="edx-field"><span>Font</span><select class="edx-in" data-mk="font">${f ? "" : `<option value="">mixed</option>`}${fontOptions(f ? f.v || "Newsreader" : null)}</select></label>${nv("weight", "Weight", 10)}</div>
         <div class="edx-grid3">${nv("size", "Size", .5, 'min="1"')}${nv("leading", "Leading", .01)}${nv("tracking", "Tracking", 5)}</div>
-        <div class="edx-grid2">${es.every(e => e.font === "Archivo") ? `<label class="edx-field"><span>Width</span>${sel1("stretch", Design.WIDTHS.map(([w, n]) => [w, n]), st ? (st.v || 100) : null)}</label>` : "<span></span>"}
+        <div class="edx-grid2">${widthsAll.length ? `<label class="edx-field"><span>Width</span>${sel1("stretch", widthsAll, st ? (st.v || 100) : null)}</label>` : "<span></span>"}
           <label class="edx-field"><span>Case</span>${sel1("case", [["none", "As typed"], ["upper", "UPPER"], ["lower", "lower"]], c ? (c.v || "none") : null)}</label></div>
         <div class="edx-field"><span>Align lines</span><div class="seg edx-seg small">${["left", "center", "right"].map(a => `<button data-mk="align" data-v="${a}" aria-pressed="${!!al && (al.v || "left") === a}">${a}</button>`).join("")}</div></div>`)
         + sec("Colour · all of them", `<div class="edx-field"><span>Letters</span>${paintCtl("color", same("color") ? (same("color").v || "#EEEAE2") : (es[0].color || "#EEEAE2"))}</div>
@@ -1701,7 +1836,7 @@ const Editor = (() => {
         const v = inp.dataset.v ?? inp.value;
         if (v === "") return;
         mutate(() => es.forEach(e => {
-          if (k === "font") { e.font = v; const w = Design.WEIGHTS[v] || [100, 900]; e.weight = Math.max(w[0], Math.min(w[1], e.weight || 400)); if (v !== "Archivo") delete e.stretch; if (v !== "Newsreader") delete e.italic; }
+          if (k === "font") setFont(e, v);
           else if (k === "case") { if (v === "none") delete e.case; else e.case = v; }
           else if (["size", "leading", "tracking", "weight", "stretch", "sw", "width"].includes(k)) { if (!isNaN(+v)) e[k] = +v; }
           else e[k] = v;

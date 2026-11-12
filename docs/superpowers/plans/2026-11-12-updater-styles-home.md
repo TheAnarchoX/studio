@@ -18,6 +18,11 @@ conversation and is specified in Tasks 2–3 below.
 
 ## Global constraints
 
+- **Principle (the author's goal for this work):** Studio works equally well with AI as without, and nobody ever has
+  to touch a config file; everyone gets a tailored experience. So every capability Claude's tools have also has a
+  control in the interface, and every setting, rule and style is editable in the app. The one exception is
+  connecting Claude itself, which stays a copy-paste on the Info page.
+
 - Run tests with `python -m unittest discover tests` (from the repo root, the repo's `.venv`); every task ends green.
 - No front-end build step: classic `<script>` files; shared helpers `$`, `$$`, `api`, `toast`, `esc`, `md`,
   `openDialog`, `setNav`, `route` are globals defined in `studio/static/app.js`.
@@ -259,9 +264,19 @@ italic, and note it in `families.json` (`"italic": false` only files).
   if the family has it, `font-stretch` only with `wdth`, opsz per family); `editor.js` shows *Width* when
   `widthsOf(font).length`, *Italic* when the family has italics, clamps weight to `weightsOf`. `app.css` keeps
   its own `@font-face` for the interface.
-- [ ] **Step 5:** Run the suite and `tests/e2e_mcp.py` → PASS. In the browser: an existing 1.0 design renders
-  pixel-identically (export it before and after, compare with Pillow `ImageChops.difference(...).getbbox() is None`);
-  a text layer set to Literata italic renders and exports.
+- [ ] **Step 0 (before any change): baseline.** Write `tools/design_regression.py` (no personal data in it):
+  `export --library <dir> --out <dir> [--port 4750]` starts `studio web` from this checkout on that port against the
+  library, exports every design of every poem through `POST /api/design/export`, copies the PNGs to `--out`, and
+  dumps `/api/metrics` for every metrics key the designs' text layers use (`metrics.json`); `compare <a> <b>` reports,
+  per image, identical or the differing bounding box and pixel count, and whether `metrics.json` is identical.
+  Copy your own library's `Poems` folder (read-only) to a temp folder outside the repo
+  and run `export` at the task's base commit into a temp `before/` folder. Never commit the copy or the exports.
+- [ ] **Step 5:** Run the suite and `tests/e2e_mcp.py` → PASS. Run `export` again after the change into `after/` and
+  `compare before after`: every image identical (designs in Newsreader and Archivo, including italic, widths, optical
+  sizes, masked text and designs imported from carousel slides) and `metrics.json` identical (the editor's ink
+  alignment and snapping read those metrics). Any difference is reported in the task report and fixed, never accepted.
+  In the browser: a text layer set to Literata italic renders and exports; in the editor, a text layer dragged near
+  another's left ink edge snaps to it.
 - [ ] **Step 6:** Commit `Font registry: every family's files and axes, used by metrics, renderer and editor`.
 
 ### Task 6: Adding fonts: own files, Google Fonts, the computer's fonts
@@ -383,11 +398,14 @@ dark = background on dark palettes, etc.) plus the palettes of the looks below. 
   `/api/styles/palette/delete` (`{"name"}`), `/api/styles/look`, `/api/styles/look/delete`, `/api/styles/rules`
   (`{"text"}`), `/api/palette/from-image` (`{"data": base64}` → `{"swatches": [hex]}`), `/api/series/style`
   (`{"name", "look"? , "palette"?, "fonts"?, "detach"?, "link"?}` → the series), `/api/poem/style`
-  (`{"id", "look"?, "palette"?, "fonts"?, "clear"?: true}` → the poem).
+  (`{"id", "look"?, "palette"?, "fonts"?, "clear"?: true}` → the poem), `GET /api/series/colours?name=` →
+  `styles.colours_used(design_files: list[Path]) -> list[{"hex", "count"}]`: every colour in the series' designs
+  (`background`, `fill`, `stroke`, text `color`, gradient stops), hex upper-cased, most used first.
 
 - [ ] **Step 1: Write the failing tests** (live server): `test_styles_empty_library` (fresh temp library, no
   `Styles/`: 200, 10 looks), `test_save_and_delete_palette_over_http`, `test_series_style_detach_over_http`,
-  `test_poem_style_override_and_clear`, `test_palette_from_image_over_http`.
+  `test_poem_style_override_and_clear`, `test_palette_from_image_over_http`, `test_colours_used_in_a_series` (two
+  designs with a background, a fill, a gradient stop and a text colour, one repeated: counts and upper-case hex).
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run the suite → PASS.
 - [ ] **Step 5:** Commit `Styles API`.
 
@@ -409,7 +427,9 @@ Pages (editorial layout like Settings; right-click on cards and rows):
   default*, *Edit* (palette and the three font roles with `fontPicker`), *Duplicate*, *Delete* (own only).
 - **Palettes:** swatch strips with *Edit*, *Duplicate* and *Delete* (own only); the editor dialog: per swatch name, hex field plus colour input, role select, remove;
   *Add swatch*, *Paste colours* (any text; every `#rrggbb` found becomes a swatch), *From an image* (file input →
-  `/api/palette/from-image` → swatches to keep), contrast warnings under the strip.
+  `/api/palette/from-image` → swatches to keep), contrast warnings under the strip. Opened from a series (Task 10),
+  the editor also shows *Colours used in this series* (`/api/series/colours`, minus the palette's own) as candidates
+  to add with one click; `palettePicker`/the editor take an optional `{series}` context for this.
 - **Fonts:** a sample-text field (kept in `localStorage`), filters for category and source, one specimen row per
   family (name, category, source, licence, weights and widths, *Used in*); *Add fonts* opens a dialog with tabs
   *Google Fonts* (search, category, results previewed with a `fonts.googleapis.com/css2` link for the visible
@@ -430,7 +450,11 @@ Pages (editorial layout like Settings; right-click on cards and rows):
 **Files:**
 - Modify: `studio/static/app.js` (`renderSeries()` Look, Rules and Concepts tabs; poem header ••• menu), `studio/static/app.css`
 - Modify: `studio/static/editor.js` (line 62 `fonts()`: the poem's resolved font roles first, then
-  `Design.fontNames()`; the font select groups *This series* then categories then *On this computer*)
+  `Design.fontNames()`; the font select groups *This series* then categories then *On this computer*; the swatch
+  rows in `swatchRow`/`paintCtl` take the poem's resolved palette (`poem.style.palette`) and keep the *document
+  colours* group from `main`'s `documentColours(design, palette)` helper after the palette swatches)
+- Before this task: merge `main` into `styles-books` (it carries the document-colours change to `editor.js`); in
+  `swatchRow`/`paintCtl` conflicts keep the document-colours group.
 
 **Interfaces:**
 - Consumes: `POST /api/series/style`, `POST /api/series/update` (`fields.rules`, `fields.concepts` added to
@@ -442,8 +466,16 @@ Pages (editorial layout like Settings; right-click on cards and rows):
   Studio's default" / "own"), look cards to choose, palette (linked name or own swatches, edit), the three font
   roles, *Detach* / *Link to a look…*. **Rules** and **Concepts** tabs: Markdown editor with preview and *Save*.
   Poem ••• menu: *Style…* opens a dialog (look, palette, fonts, or *Use the series' style*).
+  Design tab: a document-colour swatch has *Add to palette* (button on hover and in its right-click menu) with an
+  optional role. It adds the swatch to the palette the design resolves to: a poem's or series' own copy is changed
+  directly (`/api/poem/style` or `/api/series/style`); a linked library palette asks first: *Change the library
+  palette "<name>" (used by N series)*, *Give this series its own copy*, or *Cancel* — the first saves through
+  `/api/styles/palette`, the second detaches the series and then adds the swatch.
 - [ ] **Step 5:** Browser check: change a series' look, detach it, edit its own palette, link it back; a poem
-  override shows in the Design tab's fonts and swatches; the 1.0 series renders unchanged.
+  override shows in the Design tab's fonts and swatches; the 1.0 series renders unchanged. Document colours survive
+  the palette refactor (a design with a colour outside its palette shows it in the second group); *Add to palette*
+  on an own-copy palette adds the swatch at once; on a linked library palette it asks before changing the library,
+  and both answers do what they say; the palette editor opened from a series lists its used colours as candidates.
 - [ ] **Step 6:** Commit `Series look, rules and concepts editable in the app; poem style override`.
 
 ### Task 11: Design checks per series
@@ -587,7 +619,70 @@ it carries a little further.
   expect the error. **Step 4:** Run the suite and `python tests/e2e_mcp.py` → PASS.
 - [ ] **Step 5:** Commit `MCP tools use the styles and house rules`.
 
-### Task 16: Release 1.1.0
+### Task 16: Make a carousel without Claude
+
+**Files:**
+- Create: `studio/making.py`, `studio/routes_making.py` (registered in `web.py`), `tests/test_making.py`,
+  `tests/fixtures/kit/build.py`, `tests/fixtures/kit/concepts/plain.js`, `tests/fixtures/kit/concepts/bars.js`
+- Modify: `studio/mcp_server.py` (`render` and `qa` call `making`), `studio/store.py` (`save_posting_notes`),
+  `studio/static/app.js` (Art tab), `studio/static/app.css`
+
+**Interfaces:**
+- Produces: `making.render(store, ref, slide: int | None = None, format: str | None = None, signed: bool | None = None)
+  -> dict` (`{"images": [rel], "sheet": rel | None, "status": str, "seconds": float}`; a `ready` poem moves to
+  `in review`, exactly as the MCP tool did); `making.run_qa(store, ref, slide=None, format=None) -> dict`
+  (`{"summary": str, "report": dict}`); `store.save_posting_notes(ref, text) -> dict` (writes `NOTES.md`).
+  The MCP tools keep their text and picture output, built from these results.
+- Produces endpoints: `GET /api/concepts?series=` (the kit's concepts: id, name, doc), `POST /api/slides` (`{id, slides}`
+  → `store.set_slides`), `POST /api/brief` (`{id, text}` → `store.write_brief`), `POST /api/posting-notes`
+  (`{id, text}`), `POST /api/render` (`{id, slide?, format?, signed?}`), `POST /api/qa` (`{id, slide?, format?}`).
+  `KitError` and `ValueError` become 400s with their message.
+- The test kit (`tests/fixtures/kit/`) implements the kit contract of `docs/KITS.md` without Chrome: `shoot` draws
+  a PNG with Pillow (filled rectangles, one per line of the poem, plus a name bar when signed), `RATIOS` has
+  `"45"` only, `SCALE = 1`, and `CHROME = sys.executable` so `Kit.shoot_all`'s browser check passes.
+
+- [ ] **Step 1: Write the failing tests:** `test_render_with_the_test_kit` (a series using the test kit; 2 slides;
+  images and the sheet exist; a `ready` poem becomes `in review`), `test_render_one_slide_one_format`,
+  `test_qa_runs_after_render` (summary mentions both slides), `test_render_without_slides_is_a_400` (live server),
+  `test_slides_brief_and_posting_notes_over_http`, `test_mcp_render_uses_making` (the tool's text lists the same
+  image paths).
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement `making.py`, the store function, the routes, and point the MCP
+  tools at `making`.
+- [ ] **Step 4:** Front end, Art tab (series with a kit): **Slides** — the poem's slides as a list (concept name,
+  its parameters as key/value fields, remove, drag to reorder) and *Add slide* (the kit's concepts with their
+  descriptions); **Brief** and **Posting notes** — Markdown editors with preview and *Save*; **Render** (all, or
+  the selected slide and format, with progress and the elapsed time) and **Run QA** (the QA lines refresh). Series
+  without a kit keep the Design tab as their way to make images, as now.
+- [ ] **Step 5:** Run the suite and `python tests/e2e_mcp.py` → PASS. Browser: on a scratch copy of a series with a
+  kit, make a carousel from scratch with no Claude: add three slides, write a brief, render, run QA, fix a slide's
+  parameter, render that slide again.
+- [ ] **Step 6:** Commit `Make a carousel in the app: slides, brief, render and QA`.
+
+### Task 17: No config files
+
+Connecting Claude stays as it is (the Info page's copy-paste setup): the author ruled it the one exception, as
+prosumer use.
+
+**Files:**
+- Modify: `studio/store.py` (`update_series` accepts `formats`), `studio/static/app.js` (series page *Details*;
+  Settings), `tests/test_store.py`
+
+**Interfaces:**
+- Consumes: `POST /api/series/update` with `fields.formats` (a subset of `["1:1", "4:5", "9:16"]`, at least one;
+  anything else raises `StoreError("Formats are 1:1, 4:5 and 9:16.")`).
+
+- [ ] **Step 1: Write the failing test** `test_update_series_formats` (valid subset saved; empty list and `"2:3"`
+  refused).
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement.
+- [ ] **Step 4:** Front end. Series page → *Details*: tagline, description, signature and formats (1:1, 4:5, 9:16
+  checkboxes). Settings has a control for every key of `config.DEFAULTS` (library, signature, port, browser, open
+  with, updates, appearance, default look).
+- [ ] **Step 5:** Run the suite → PASS. Browser: edit a series' details and see them on its page and in the
+  editor's formats; walk every key of `config.DEFAULTS` and every field of `series.json`, `poem.json` and the
+  Styles files, and confirm each has a control in the app (list any that don't in the task report).
+- [ ] **Step 6:** Commit `Series details and every setting editable in the app`.
+
+### Task 18: Release 1.1.0
 
 **Files:**
 - Modify: `studio/__init__.py` (`__version__ = "1.1.0"`), `pyproject.toml` (version), `README.md` (Styles,

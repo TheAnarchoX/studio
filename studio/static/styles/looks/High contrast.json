@@ -1,0 +1,4 @@
+{"name": "High contrast", "palette": "High contrast",
+ "fonts": {"display": {"family": "Bebas Neue", "weight": 400},
+           "text": {"family": "Atkinson Hyperlegible", "weight": 400},
+           "label": {"family": "Atkinson Hyperlegible", "weight": 700}}}

@@ -1,0 +1,4 @@
+{"name": "Pastel", "palette": "Pastel",
+ "fonts": {"display": {"family": "Fraunces", "weight": 400},
+           "text": {"family": "Literata", "weight": 400},
+           "label": {"family": "Work Sans", "weight": 500}}}

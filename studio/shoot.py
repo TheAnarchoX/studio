@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
-from . import config
-from .store import DESIGN_FORMATS, RENDERS
+from . import config, fonts
+from .store import DESIGN_FORMATS, RENDERS, StoreError
 
 
 def screenshot(url, w, h, out: Path, scale=2):
@@ -33,11 +33,25 @@ def screenshot(url, w, h, out: Path, scale=2):
     return out
 
 
+def check_fonts(design):
+    """Stop before Chrome runs when the export would be set in the wrong type (the page can't report that itself)."""
+    reg = fonts.registry()
+    if not reg.families():
+        raise StoreError("Studio couldn't load its fonts, so the export was stopped.")
+    names = [e.get("font") for e in design.get("elements") or []     # no font set means Newsreader, as before
+             if isinstance(e, dict) and e.get("type") == "text"]
+    missing = reg.resolve_missing(names, 10)    # asks the computer's fonts too
+    if missing:
+        raise StoreError("This design uses fonts Studio doesn't have: " + ", ".join(missing) + ".")
+
+
 def export_design(store, base_url, ref, slug, formats=None):
     """Write Design renders/<slug>/<slug>-<tag>.png (and -noname.png when the design has a name layer)."""
     folder = store.resolve(ref)
     d = store.read_design(folder, slug)
-    fmts = [f for f in (formats or ["45", "11", "916"]) if f in DESIGN_FORMATS]
+    check_fonts(d)
+    allowed = store.design_formats(folder)       # the series decides which formats exist
+    fmts = [f for f in (formats or ["45", "11", "916"]) if f in DESIGN_FORMATS and f in allowed]
     named = any(e.get("role") == "name" and not e.get("hidden") for e in d["elements"])
     jobs = []
     for fmt in fmts:

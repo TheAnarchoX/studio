@@ -6,6 +6,7 @@ falls back to a Chrome/Edge app window, then to the default browser.
 `studio install` adds a launcher with Studio's icon: a Start menu shortcut on Windows (pin it to the
 taskbar), ~/Applications/Studio.app on macOS, a .desktop entry on Linux.
 """
+import json
 import os
 import shutil
 import socket
@@ -17,11 +18,15 @@ import time
 import webbrowser
 from pathlib import Path
 
-from . import config
+from . import config, updater
 
 APP_ID = "Studio.PoemStudio"            # Windows AppUserModelID: ties the window to its pinned shortcut
 ICONS = Path(__file__).parent / "static" / "icons"
 TITLE = "Studio"
+LANGUAGE_TAG = config.LANGUAGE_TAG          # books.LANGUAGE too
+MAX_LANGUAGES = 12
+WEBVIEW2_ARGS = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+USER_ARGS = "STUDIO_WEBVIEW2_USER_ARGUMENTS"        # the user's own WebView2 arguments, before Studio added its languages
 
 
 def _up(port):
@@ -43,6 +48,98 @@ def ensure_server():
             break
         time.sleep(.05)
     return True
+
+
+# ——— the app window's languages: spellcheck in WebView2 ———
+def _ui_languages():
+    """The OS user's preferred UI languages ("en-US", ...) on Windows; [] elsewhere or when they can't be read."""
+    if sys.platform != "win32":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+        get = ctypes.windll.kernel32.GetUserPreferredUILanguages
+        count, size = wintypes.ULONG(), wintypes.ULONG(0)
+        if not get(0x8, ctypes.byref(count), None, ctypes.byref(size)):      # MUI_LANGUAGE_NAME
+            return []
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not get(0x8, ctypes.byref(count), buf, ctypes.byref(size)):
+            return []
+        return [t for t in buf[:size.value].split("\0") if LANGUAGE_TAG.fullmatch(t)]
+    except Exception:  # noqa: BLE001 — no languages is fine: English is added anyway
+        return []
+
+
+def _mtime(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def book_languages(books_root):
+    """The language of every book in the library, the most recently written first (a book's newest of book.json and
+    its manuscript folder). Example books count only when there is no other book. Read straight from book.json:
+    cheap, and nothing else of Studio needs to be up. A book that can't be read, or a folder that can't be listed,
+    is left out."""
+    own, examples = [], []
+    try:
+        root = Path(books_root)
+        folders = sorted(root.iterdir()) if root.is_dir() else []
+    except Exception:  # noqa: BLE001 — an unreadable library gives no languages, never a failure
+        return []
+    for d in folders:
+        try:
+            if not d.is_dir() or d.name.startswith((".", "_")):
+                continue
+            meta = json.loads((d / "book.json").read_text(encoding="utf-8-sig"))
+            lang = meta.get("language") if isinstance(meta, dict) else None
+            if isinstance(lang, str) and LANGUAGE_TAG.fullmatch(lang.strip()):
+                when = max(_mtime(d / "book.json"), _mtime(d / "manuscript"))
+                (examples if meta.get("example") is True else own).append((when, lang.strip()))
+        except Exception:  # noqa: BLE001 — unreadable, not JSON, nested too deep (RecursionError): left out
+            continue
+    return [lang for _, lang in sorted(own or examples, key=lambda x: -x[0])]
+
+
+def accept_languages(books_root, ui=None, spelling="auto"):
+    """WebView2's --accept-lang: the language chosen in Settings → Spelling (or, when that is automatic, the books'
+    languages, the most recently written first), then the OS user's UI languages, then English, de-duplicated and at
+    most MAX_LANGUAGES. WebView2 checks spelling in the first language of the list, in the whole window (checked in the
+    app window: with en-US first a Dutch book's words were all underlined, with nl first only the misspelt one)."""
+    try:
+        chosen = [spelling] if isinstance(spelling, str) and LANGUAGE_TAG.fullmatch(spelling) else []
+        tags = [*chosen, *book_languages(books_root), *(_ui_languages() if ui is None else ui)]
+    except Exception:  # noqa: BLE001
+        tags = []
+    seen, out = set(), []
+    for tag in tags:
+        if isinstance(tag, str) and LANGUAGE_TAG.fullmatch(tag) and tag.lower() not in seen and len(out) < MAX_LANGUAGES - 1:
+            seen.add(tag.lower())
+            out.append(tag)
+    if "en" not in seen:
+        out.append("en")
+    return ",".join(out)
+
+
+def webview2_arguments(user, languages):
+    """The user's own WebView2 arguments with --accept-lang added, unless they set one themselves."""
+    user = (user or "").strip()
+    if "--accept-lang" in user:
+        return user
+    return (user + " " if user else "") + f"--accept-lang={languages}"
+
+
+def set_webview2_languages(environ, books_root, ui=None, spelling="auto"):
+    """Sets WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS for the app window. The user's own arguments are remembered in
+    STUDIO_WEBVIEW2_USER_ARGUMENTS the first time, so a Studio started by Studio (an update's restart inherits the
+    environment) adds a fresh list to them instead of keeping the old one. Never raises: the window always opens."""
+    try:
+        if USER_ARGS not in environ:
+            environ[USER_ARGS] = environ.get(WEBVIEW2_ARGS, "")
+        environ[WEBVIEW2_ARGS] = webview2_arguments(environ[USER_ARGS], accept_languages(books_root, ui, spelling))
+    except Exception:  # noqa: BLE001 — e.g. a value the environment refuses: WebView2 starts with what it had
+        pass
 
 
 class Api:
@@ -112,12 +209,15 @@ def run_app():
             GLib.set_prgname("studio")          # matches StartupWMClass in the .desktop entry
         except Exception:  # noqa: BLE001
             pass
-    win = webview.create_window(TITLE, url, width=1480, height=940, min_size=(960, 640), background_color="#141619", js_api=Api())
+    win = webview.create_window(TITLE, url, width=1480, height=940, min_size=(960, 640), background_color="#F4F2EE" if config.THEME == "light" else "#141619", js_api=Api())
+    updater.on_quit = lambda: win.destroy()          # a restart after an update closes the window cleanly
     if sys.platform == "win32":
         win.events.shown += lambda: threading.Thread(target=_windows_icon, daemon=True).start()
     elif sys.platform == "darwin":
         win.events.shown += _mac_icon
     (config.CACHE / "webview").mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":     # spellcheck (Settings → Spelling); read when WebView2 starts, so a change needs a restart
+        set_webview2_languages(os.environ, config.BOOKS, spelling=config.SPELLING)
     try:
         webview.settings["ALLOW_DOWNLOADS"] = True          # Save in the viewer
     except Exception:  # noqa: BLE001

@@ -1,0 +1,5 @@
+{"name": "Ink and paper", "swatches": [
+  {"name": "Ink", "hex": "#141414", "role": "background"},
+  {"name": "Paper", "hex": "#F2EFE8", "role": "text"},
+  {"name": "Graphite", "hex": "#6E6B66", "role": "accent"},
+  {"name": "Pencil", "hex": "#A9A59E", "role": "muted"}]}

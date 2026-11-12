@@ -1,0 +1,6 @@
+{"name": "Riso", "swatches": [
+  {"name": "Paper", "hex": "#F5F1E8", "role": "background"},
+  {"name": "Riso blue", "hex": "#0078BF", "role": "text"},
+  {"name": "Fluorescent pink", "hex": "#FF48B0", "role": "accent"},
+  {"name": "Blue tint", "hex": "#7FB6DF", "role": "muted"},
+  {"name": "Yellow", "hex": "#FFE800"}]}

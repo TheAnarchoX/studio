@@ -1,0 +1,5 @@
+{"name": "Blood", "swatches": [
+  {"name": "Black", "hex": "#0B0B0C", "role": "background"},
+  {"name": "Bone", "hex": "#E9E4DA", "role": "text"},
+  {"name": "Blood", "hex": "#7A0019", "role": "accent"},
+  {"name": "Ash", "hex": "#8C8A87", "role": "muted"}]}

@@ -1,0 +1,188 @@
+/* The writing window's tools (book-tools.js, book-rail.js): the rail, the status bar's writing tools and the goal line,
+   marks in the text (echoes, the style sheet, find), focus mode, the second pane and the command palette.
+   Loaded after book.css; the window's own layout (.bw, the binder, the page, the margin) is there. */
+
+/* ——— the rail: a column of icons at the window's edge, one panel open beside it ——— */
+.bw-rail{display:flex;min-width:0;min-height:0;background:var(--room);border-left:1px solid var(--line-soft)}
+.br-icons{display:flex;flex-direction:column;flex:none;width:48px;padding:16px 0}
+.br-i{display:grid;place-items:center;height:44px;padding:0;background:none;border:0;color:var(--fog);cursor:pointer}
+.br-i:hover{color:var(--paper)}
+.br-i[aria-pressed="true"]{color:var(--paper);box-shadow:inset -2px 0 0 var(--red)}      /* the red rule at the window's edge, as the binder's */
+.br-i:focus-visible{outline-offset:-4px}
+.br-i svg{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:square}
+.br-panel{display:flex;flex-direction:column;width:340px;min-height:0;border-right:1px solid var(--line-soft)}
+/* the head is the binder's: kicker, a title in the serif, a quiet line of words */
+.br-head{flex:none;padding:22px 20px 18px;border-bottom:1px solid var(--line-soft)}
+.br-k{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.br-k .kicker{margin:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.br-x{flex:none}
+.br-t{margin:12px 0 0;font:600 22px/1.15 var(--serif);letter-spacing:-.012em;overflow-wrap:break-word}
+.br-t:empty{display:none}
+.br-sub{min-height:12px;margin:7px 0 0;font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}     /* empty, it still keeps its line: the rule under the head stays level with the binder's */
+.br-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 20px 28px;font:400 14px/1.45 var(--sans)}
+.br-empty{margin:20px 0 0;font-size:13px;line-height:1.5;color:var(--fog)}
+.br-note{margin:18px 0 0;font-size:12px;line-height:1.5;color:var(--fog)}
+.br-list{list-style:none;margin:0;padding:0}
+.br-list>li{position:relative;z-index:0;border-bottom:1px solid var(--line-soft)}
+.br-li{display:block;width:100%;padding:10px 0;text-align:left;background:none;border:0;font:inherit;color:inherit;cursor:pointer}
+.br-li:focus-visible{outline-offset:0}
+/* the item the cursor or the find is at: the binder's current row, a panel bleeding into the padding with the red rule */
+.br-li[aria-current]::before{content:"";position:absolute;inset:0 -20px;z-index:-1;background:var(--panel);box-shadow:inset 2px 0 0 var(--red)}
+
+/* outline */
+.br-ol{margin-top:14px;border-top:1px solid var(--line-soft)}
+.br-o.heading{font:500 15px/1.35 var(--serif);color:var(--paper)}
+.br-o.heading.l3{padding-left:16px;font-size:14px;color:var(--paper-dim)}
+.br-o.heading:hover .br-o-h{color:var(--paper-hot)}
+.br-o.scene{color:var(--fog);letter-spacing:.3em}
+.br-o.note{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:baseline;font:400 14px/1.45 var(--serif);color:var(--paper-dim)}
+.br-o-n{font:600 12px/1 var(--sans);color:var(--red);font-variant-numeric:lining-nums tabular-nums}
+.br-o-x i{color:var(--fog)}
+
+/* comments */
+.br-cl{margin-top:14px;border-top:1px solid var(--line-soft)}
+.br-c{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:baseline}
+.br-c-go{display:flex;flex-direction:column;gap:5px}
+.br-c-q{font:italic 400 15px/1.4 var(--serif);color:var(--paper-dim)}
+.br-c-n{font:400 13px/1.45 var(--sans);color:var(--paper)}
+.br-c-n i{color:var(--fog);font-style:normal}
+.br-c-r{padding-top:13px}
+.br-c:not(:hover):not(:focus-within) .br-c-r{visibility:hidden}
+
+/* history */
+.br-hl{margin-top:14px;border-top:1px solid var(--line-soft)}
+.br-h{display:block}
+.br-h.now{display:flex;justify-content:space-between;align-items:baseline;padding:10px 0}
+.br-h-go{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.br-h-w{font:500 14px/1.3 var(--sans);color:var(--paper)}
+.br-h.now .br-h-w{color:var(--fog)}
+.br-h-n{font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums;white-space:nowrap}
+.br-h-d{margin-left:6px}
+.br-h.open .br-h-go .br-h-w{color:var(--paper-hot)}
+.br-diff{padding:0 0 16px}
+.br-legend{margin:0 0 10px;font-size:12px;line-height:1.45;color:var(--fog)}
+.br-dv{margin:0 0 14px;padding:12px 14px}
+.br-dv p{margin:0 0 .7em;font:400 15px/1.5 var(--serif);white-space:pre-wrap;overflow-wrap:break-word}
+.br-dv p:last-child{margin-bottom:0}
+.br-dv .br-same{font:500 12px/1.4 var(--sans);color:var(--fog)}
+.br-acts{display:flex;align-items:center;gap:8px}
+.br-acts .grow{flex:1}
+
+/* sources */
+.br-tools{display:flex;gap:8px;align-items:center;margin:16px 0 14px}
+.br-body .input,.br-body .select{height:38px;padding:8px 10px;font:400 14px/1.4 var(--sans)}
+.br-sq{flex:1;min-width:0}
+.br-sl{border-top:1px solid var(--line-soft)}
+.br-s{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:baseline}
+.br-s-go{display:flex;flex-direction:column;gap:3px}
+.br-s-a{font:500 15px/1.3 var(--serif);color:var(--paper)}
+.br-s-t{font:italic 400 14px/1.35 var(--serif);color:var(--paper-dim)}
+.br-s-t:empty{display:none}
+.br-s-k{font:500 11px/1.3 var(--sans);letter-spacing:.02em;color:var(--fog)}
+.br-s-go:hover .br-s-a{color:var(--paper-hot)}
+.br-s-c{padding-top:13px}
+.br-s:not(:hover):not(:focus-within) .br-s-c{visibility:hidden}
+.br-form{display:flex;flex-direction:column;gap:14px;padding-top:16px}
+.br-back{align-self:flex-start}
+.br-f{display:block;min-width:0}
+.br-f .label{margin:0 0 6px}
+.br-f .hint{display:block;margin:6px 0 0;font-size:12px}
+.br-f2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.br-err{margin:0}
+
+/* find and replace */
+.br-find{display:flex;flex-direction:column;gap:12px;padding:16px 0 4px}
+.br-opts{display:flex;gap:18px}
+.br-ck{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--paper-dim);cursor:pointer}
+.br-ck input{margin:0;accent-color:var(--red)}
+.br-fs{margin:0;font:500 12px/1.3 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}       /* its own line: "Not in the book" never wraps beside the buttons */
+.br-fs:empty{display:none}
+.br-g{margin-top:20px}
+.br-g-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 8px;font:600 15px/1.3 var(--serif);color:var(--paper)}
+.br-g-h span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.br-g-n{font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+.br-g .br-list{border-top:1px solid var(--line-soft)}
+.br-r{font:400 13px/1.5 var(--sans);color:var(--paper-dim)}
+.br-r-t{display:block;overflow-wrap:break-word}
+.br-r mark{padding:0 1px;color:var(--paper);background:color-mix(in srgb,var(--paper) 16%,transparent)}
+.br-r.on mark{box-shadow:inset 0 -2px 0 var(--red)}
+.br-r-in{display:block;margin-top:3px;font:500 11px/1.2 var(--sans);color:var(--fog)}
+
+/* ——— marks in the text ——— */
+.bk-text .bt-echo{text-decoration:underline solid color-mix(in srgb,var(--fog) 75%,transparent);text-decoration-thickness:2px;text-underline-offset:.24em;text-decoration-skip-ink:none}
+.bk-text .bt-style{text-decoration:underline dotted color-mix(in srgb,var(--red) 75%,transparent);text-decoration-thickness:1.5px;text-underline-offset:.24em;text-decoration-skip-ink:none}
+.bk-text .bt-find{background:color-mix(in srgb,var(--paper) 16%,transparent)}
+.bk-text .bt-find.on{background:color-mix(in srgb,var(--paper) 26%,transparent);box-shadow:inset 0 -2px 0 var(--red)}
+/* the citation form (book-text.js) has four quiet buttons with Add source: on one line */
+.bk-pop-f .bm-btn{white-space:nowrap}
+/* the style sheet's word under the cursor: what to use, and the button that uses it */
+.bt-tip{position:absolute;z-index:5;display:flex;align-items:baseline;gap:14px;max-width:min(440px,calc(100% - 32px));padding:9px 12px;background:var(--pop);
+  border:1px solid var(--line);box-shadow:0 10px 30px var(--shadow-1);font:400 13px/1.4 var(--sans);color:var(--paper-dim)}
+.bt-tip .bm-btn{flex:none;color:var(--paper)}
+.bt-tip .bm-btn:hover{color:var(--paper-hot)}
+/* sentence rhythm: a bar per sentence in the margin before the text, as long as its words */
+.bt-rhythm{position:absolute;top:0;right:calc(100% + 12px);width:40px;height:100%;pointer-events:none}
+.bt-rhythm i{position:absolute;right:0;height:2px;background:color-mix(in srgb,var(--fog) 55%,transparent);pointer-events:auto}
+.bt-rhythm i.on{background:var(--paper-dim)}
+
+/* ——— the status bar's writing tools, and the daily goal as a line along its top ——— */
+.bw-status{position:relative}
+.bw-tools{display:flex;align-items:center;gap:20px;flex:none}
+.bw-tools [hidden]{display:none}
+.bw-goal{position:absolute;left:0;top:-1px;width:0;height:2px;background:color-mix(in srgb,var(--red) 65%,transparent);pointer-events:none;transition:width .5s var(--ease)}
+.bw-goal.done{background:var(--red)}
+.bw-goal[hidden]{display:none}
+
+/* the bar over the text: a long message wraps beside its buttons, which stay at the row's end like every other row's */
+.bw-bar-t{flex:1 1 280px;min-width:0}
+
+/* ——— split view: a second pane after the first, each with a head ——— */
+.bw.split{grid-template-columns:272px minmax(0,1fr) minmax(0,1fr) auto}
+.bw.split.nobinder{grid-template-columns:0 minmax(0,1fr) minmax(0,1fr) auto}
+.bw.split .bw-rail{grid-column:4}
+.bw-main.bw-split{grid-column:3;grid-row:1;border-left:1px solid var(--line-soft)}
+.bw-ph{display:flex;align-items:baseline;gap:14px;flex:none;height:44px;min-width:0;padding:16px 24px 0;border-bottom:1px solid var(--line-soft)}     /* one baseline for the title, the state and Close */
+.bw-ph-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:600 13px/1 var(--sans);color:var(--paper)}
+.bw-ph .state{flex:none;font-size:12px;line-height:1}
+.bw-ph-x{flex:none;margin-left:auto}
+.bw.split .bw-page{grid-template-columns:minmax(0,65ch) clamp(150px,13vw,200px);column-gap:clamp(20px,2.4vw,36px);padding:40px clamp(16px,2.4vw,36px) 42vh}
+
+/* ——— room (book-tools.js, fit): when a text column would be under 360 px the list of pieces goes first, then the page's
+   side gutters and the notes margin (tight), then the rhythm's gutter (compact); what still doesn't fit is refused ——— */
+.bw.tight:not(.focus) .bw-page{grid-template-columns:minmax(0,65ch) 150px;column-gap:24px;padding-left:16px;padding-right:16px}
+
+/* ——— Rhythm on, in a piece that isn't a poem: a gutter before the text for its bars (40 px of bars, 12 px from the text:
+   56 px; compact 36 px); the text gives way by its width ——— */
+.bw .bw-page.bt-rg,.bw.tight:not(.focus) .bw-page.bt-rg{padding-left:56px}
+.bw.compact .bw-page.bt-rg,.bw.compact.tight:not(.focus) .bw-page.bt-rg{padding-left:36px}
+
+/* ——— focus mode: only the text being written; the paragraph with the cursor lit, the rest at 35% ——— */
+body:has(.bw.focus) .top{display:none}
+.bw.focus{inset:0}
+.bw.focus,.bw.focus.nobinder{grid-template-columns:0 minmax(0,1fr) 0}
+.bw.focus.split,.bw.focus.split.nobinder{grid-template-columns:0 minmax(0,1fr) 0 0}
+.bw.focus .bw-binder,.bw.focus .bw-rail,.bw.focus .bw-margin,.bw.focus .bw-ph{display:none}
+.bw.focus.split:not(.focus-split) .bw-split,.bw.focus.focus-split .bw-main:not(.bw-split){display:none}
+.bw.focus.focus-split .bw-split{grid-column:2;border-left:0}
+.bw.focus .bw-page,.bw.focus.split .bw-page{grid-template-columns:minmax(0,65ch);padding-top:45vh;padding-bottom:55vh}
+.bw.focus .bk-text>:not(blockquote):not(.bk-epigraph):not(.bk-poem):not(.bt-cur):not(.ProseMirror-gapcursor),
+.bw.focus .bk-text>:is(blockquote,.bk-epigraph,.bk-poem)>:not(.bt-cur){opacity:.35;transition:opacity .25s var(--ease)}
+@media (prefers-reduced-motion:reduce){.bw.focus .bk-text *{transition:none!important}.bw-goal{transition:none}}
+
+/* ——— the command palette ——— */
+.bt-pal-wrap{position:fixed;inset:0;z-index:150;background:color-mix(in srgb,var(--night) 40%,transparent)}
+.bt-pal{position:absolute;top:min(14vh,128px);left:50%;transform:translateX(-50%);display:flex;flex-direction:column;width:min(640px,calc(100vw - 32px));
+  max-height:min(68vh,560px);background:var(--pop);border:1px solid var(--line);box-shadow:0 24px 64px var(--shadow-1)}
+.bt-pal-q{flex:none;height:56px;padding:0 20px;background:transparent;border:0;border-bottom:1px solid var(--line-soft);font:400 17px/1 var(--sans);color:var(--paper)}
+.bt-pal-q:focus{outline:none}
+.bt-pal-q::placeholder{color:var(--placeholder)}
+.bt-pal-list{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 6px 8px}
+.bt-pal-g{padding:14px 14px 6px;font:600 11px/1.2 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--fog)}
+.bt-pal-i{display:flex;align-items:baseline;gap:16px;padding:9px 14px;font:400 14px/1.3 var(--sans);color:var(--paper-dim);cursor:pointer}
+.bt-pal-i.piece{font:500 16px/1.3 var(--serif);color:var(--paper)}
+.bt-pal-i.untitled{font-style:italic;font-weight:400;color:var(--paper-dim)}
+.bt-pal-i[aria-selected="true"]{background:var(--panel-2);color:var(--paper)}
+.bt-pal-i .t{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bt-pal-i b{font-weight:700;color:var(--paper)}
+.bt-pal-i .h{flex:none;font:500 12px/1 var(--sans);color:var(--fog)}
+.bt-pal-none{margin:0;padding:18px 14px;font-size:14px;color:var(--fog)}

@@ -1,0 +1,4 @@
+{"name": "Academic", "palette": "Academic",
+ "fonts": {"display": {"family": "Source Serif 4", "weight": 600},
+           "text": {"family": "Source Serif 4", "weight": 400},
+           "label": {"family": "Inter", "weight": 500}}}

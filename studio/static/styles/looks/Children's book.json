@@ -1,0 +1,4 @@
+{"name": "Children's book", "palette": "Children's book",
+ "fonts": {"display": {"family": "Caveat", "weight": 700},
+           "text": {"family": "Atkinson Hyperlegible", "weight": 400},
+           "label": {"family": "Atkinson Hyperlegible", "weight": 700}}}
