@@ -27,6 +27,7 @@ Google Docs. It sets the bar: mixed forms in one book, editions over time, notes
 | Adaptive interface | A book has a kind that presets features; the interface shows only what the book uses. |
 | Mixed forms | Each piece has a form (prose, poem, essay, letter); poems can link to the Poems library. |
 | Growth over time | Editions freeze a dated copy of the whole book; per-piece history for day-to-day changes. |
+| Look, fonts, rules | From the styles system (`2026-11-12-styles-home-design.md`), built first: a book has a look, a style sheet and print checks. |
 
 ## On disk
 
@@ -71,6 +72,9 @@ Deleting a book or a piece moves it to `Books/.trash/`, like poems.
     {"auto": "notes"}, {"auto": "bibliography"}, {"auto": "index"}
   ],
   "goals": {"daily": 0},
+  "look": "Editorial light",
+  "style": {"quotes": "“…”", "numbers": "words to ten", "terms": [], "notes": ""},
+  "checks": {},
   "design": {}
 }
 ```
@@ -136,7 +140,8 @@ Markdown returns the same text for every element above.
 
 ## Studio interface
 
-**Navigation.** The top bar gets *Poems · Books*. The shared board joins in part 3; *Articles* later.
+**Navigation.** The top bar becomes *Home · Poems · Books* (Home is in the styles spec). The shared board joins
+in part 3; *Articles* later.
 
 **Shelf** (`#/books`): a card per book (title, kind, word count, last written, status of its pieces), *New book*
 and *Import*. Right-click a book for its actions (open, settings, freeze edition, export, move to trash).
@@ -150,7 +155,8 @@ their defaults in one line each.
 - **Binder (left, can be hidden):** front matter, body and back matter; drag to reorder, including into a part;
   word count and status per piece; `auto` pages shown as such; *+ Chapter* and a menu for other kinds;
   right-click for rename, kind, form, status, duplicate, split here, merge with next, move to trash.
-- **Text column (middle):** about 65 characters wide in the book's typeface, generous leading, no toolbar.
+- **Text column (middle):** about 65 characters wide in the text font of the book's look, generous leading, no
+  toolbar. Text that breaks the book's style sheet gets a quiet dotted underline with a one-click fix.
   - Selecting text shows a small bar: bold, italic, note, source, index, comment (only the enabled ones).
   - `/` at the start of a line or after a space opens the insert menu: note, citation, scene break, epigraph,
     poem, image, page break, linked poem.
@@ -172,7 +178,7 @@ their defaults in one line each.
   a piece that changed and after every 30 minutes of writing; unchanged text is never snapshotted.
 
 **Book settings:** details (title, subtitle, author, language, ISBN, publisher, edition, year, copyright,
-content note), kind and features, daily goal. **Freeze edition** asks for a name and copies the book into
+content note), kind and features, look, style sheet, daily goal. **Freeze edition** asks for a name and copies the book into
 `editions/`.
 
 Style follows Studio: editorial, quiet, no badges or flourishes; right-click menus everywhere; keyboard first.
