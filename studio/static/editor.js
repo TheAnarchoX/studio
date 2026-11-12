@@ -210,7 +210,7 @@ const Editor = (() => {
       const nd = await api(`/api/design?id=${encodeURIComponent(poem.id)}&d=${encodeURIComponent(s)}`);
       nd.elements ||= []; nd.elements.forEach(e => { e.id ||= Design.uid(); });
       d = nd; slug = s; loadedAt = designs.find(x => x.slug === s)?.updated; pref.set("last." + poem.id, s);
-      sel = []; undo = []; redo = []; dirty = false; view.auto = true;
+      sel = []; undo = []; redo = []; dirty = false; view.auto = true; docSeen = [];
       await Design.ready(d);
       shell(); fit(); paint(); panels();
     } catch (e) { toast(e.message, true); hub(); }
@@ -1398,8 +1398,35 @@ const Editor = (() => {
     syncBar();
   }
 
+  /* Document colours: every colour the design uses that isn't in the series palette (fills, outlines, strokes,
+     letters, full stops, background, gradient stops, in every format), in the order they were first seen. */
+  const PAINTS = new Set(["background", "color", "accent", "stroke", "fill", "c"]);
+  let docSeen = [];
+  function docColors() {
+    if (!d) return [];
+    const used = new Set();
+    const walk = (v, k) => {
+      if (typeof v === "string") { if (PAINTS.has(k) && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) used.add((v.length === 4 ? "#" + [...v.slice(1)].map(x => x + x).join("") : v).toUpperCase()); }
+      else if (Array.isArray(v)) v.forEach(x => walk(x, k));
+      else if (v && typeof v === "object") for (const [kk, x] of Object.entries(v)) if (kk !== "pts" && kk !== "text") walk(x, kk);
+    };
+    walk(d, "");
+    for (const c of used) if (!docSeen.includes(c)) docSeen.push(c);
+    const pal = new Set(palette().map(c => c.hex.toUpperCase()));
+    return docSeen.filter(c => used.has(c) && !pal.has(c));
+  }
+  async function addToPalette(hex) {
+    const name = prompt(`Name for ${hex} in the ${poem.series} palette`, hex);
+    if (name == null) return;
+    try {
+      const r = await api("/api/series/update", {name: poem.series, fields: {palette: [...palette(), {name: name.trim() || hex, hex}]}});
+      (poem.series_info ||= {}).palette = r.palette;
+      props(); toast(`Added ${hex} to the ${poem.series} palette`);
+    } catch (e) { toast(e.message, true); }
+  }
   const swatchRow = (key, cur, allowNone = false) => `<div class="edx-sw">${allowNone ? `<button class="none ${!cur ? "on" : ""}" data-sw="${key}" data-v="" title="None">⌀</button>` : ""}${
-    palette().map(c => `<button class="${(cur || "").toUpperCase() === c.hex.toUpperCase() ? "on" : ""}" data-sw="${key}" data-v="${esc(c.hex)}" title="${esc(c.name)} ${esc(c.hex)}" style="--c:${esc(c.hex)}"></button>`).join("")}
+    palette().map(c => `<button class="${(cur || "").toUpperCase() === c.hex.toUpperCase() ? "on" : ""}" data-sw="${key}" data-v="${esc(c.hex)}" title="${esc(c.name)} ${esc(c.hex)}" style="--c:${esc(c.hex)}"></button>`).join("")}${
+    docColors().map(c => `<button class="doc ${(cur || "").toUpperCase() === c ? "on" : ""}" data-sw="${key}" data-v="${c}" data-doc="${c}" title="${c} · in this design" style="--c:${c}"></button>`).join("")}
     <label class="custom" title="Another colour"><input type="color" data-color="${key}" value="${esc(cur && /^#[0-9a-f]{6}$/i.test(cur) ? cur : "#888888")}"></label>
     ${cur ? `<span class="hex">${esc(cur.toUpperCase())}</span>` : ""}</div>`;
   const stopSel = {};
@@ -1451,6 +1478,10 @@ const Editor = (() => {
       if (live) paint(); else props();
     };
     $$("[data-sw]", el).forEach(b => b.onclick = () => color(b.dataset.sw, b.dataset.v || null));
+    $$("[data-doc]", el).forEach(b => b.oncontextmenu = ev => {
+      const full = palette().length >= 8;
+      StudioMenu.open(ev, [{label: full ? "Add to series palette (it has 8 colours)" : "Add to series palette…", disabled: full, act: () => addToPalette(b.dataset.doc)}]);
+    });
     $$("[data-color]", el).forEach(i => { i.oninput = () => color(i.dataset.color, i.value.toUpperCase(), true); i.onchange = () => props(); });
     $$("[data-gbar]", el).forEach(bar => {
       const key = bar.dataset.gbar, track = $(".track", bar);

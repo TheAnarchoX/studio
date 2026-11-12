@@ -128,10 +128,11 @@ select.edx-in{padding:6px 7px}
 .edx-sw button{width:24px;height:24px;border:1px solid rgba(255,255,255,.14);cursor:pointer;padding:0;background:var(--c,none);color:var(--fog)}
 .edx-sw button.on{outline:2px solid var(--paper);outline-offset:2px}
 .edx-sw .none{font-size:13px;line-height:1;background:none}
-.edx-sw .custom{position:relative;width:24px;height:24px;border:1px dashed #3A3E45;cursor:pointer;overflow:hidden}
+.edx-sw button:not(.doc):has(+ .doc){margin-right:6px}
+.edx-sw .custom{position:relative;width:24px;height:24px;border:1px dashed #3A3E45;cursor:pointer;overflow:hidden;margin-right:4px}
 .edx-sw .custom input{position:absolute;inset:-6px;width:40px;height:40px;opacity:0;cursor:pointer}
 .edx-sw .custom::after{content:"+";position:absolute;inset:0;display:grid;place-items:center;color:var(--fog);font-size:14px;pointer-events:none}
-.edx-sw .hex{font:500 11px/1 ui-monospace,Consolas,monospace;color:var(--fog);margin-left:4px}
+.edx-sw .hex{font:500 11px/1 ui-monospace,Consolas,monospace;color:var(--fog)}
 .edx-check{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--paper-dim);cursor:pointer;line-height:1.4}
 .edx-check input{accent-color:var(--red);margin-top:1px}
 .edx-align{display:flex;gap:2px}
