@@ -1,0 +1,162 @@
+/* Compose (book-compose.js) and the page viewer (book-pages.js). Loaded after book-tools.css: the contents list reuses
+   the writing window's binder rows (.bb-*), the side panel its rail heads (.br-*). The pages lie on a neutral desk
+   (--desk) in either theme; the paper is the page's own colour (white or cream), whatever the theme. The viewer's own
+   variables are --bp-*, so it sits anywhere (the pages pane is inside the writing window). */
+
+:root{--desk:#2A2B2E;--page-edge:rgba(0,0,0,.55);--page-shade:rgba(0,0,0,.35)}
+:root[data-theme="light"]{--desk:#D3D1CC;--page-edge:rgba(40,32,20,.16);--page-shade:rgba(40,32,20,.14)}
+@media (prefers-color-scheme: light){
+  :root[data-theme="system"]{--desk:#D3D1CC;--page-edge:rgba(40,32,20,.16);--page-shade:rgba(40,32,20,.14)}
+}
+
+/* ——— the view: the bar across the top, the contents, the pages, the panel, the foot ———
+   --bc-gutter is the side panel's scrollbar (book-compose.js measures it): the panel's head, its fields and the bar's
+   Design toggle all end that far from the window's edge, on one line. */
+.bc{position:fixed;inset:60px 0 0;z-index:1;display:grid;grid-template-columns:272px minmax(0,1fr) 320px;grid-template-rows:48px minmax(0,1fr) 36px;
+  background:var(--night);--bc-l:272px;--bc-gutter:0px}
+.bc.nocontents{grid-template-columns:0 minmax(0,1fr) 320px;--bc-l:auto}
+.bc.nopanel{grid-template-columns:272px minmax(0,1fr) 0}
+.bc.nocontents.nopanel{grid-template-columns:0 minmax(0,1fr) 0}
+.bc.nocontents .bc-contents,.bc.nopanel .bc-side{display:none}
+.bc-contents{grid-column:1;grid-row:2;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--room);border-right:1px solid var(--line-soft)}
+.bc-main{grid-column:2;grid-row:2;display:flex;min-width:0;min-height:0}
+.bc-side{grid-column:3;grid-row:2;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--room);border-left:1px solid var(--line-soft)}
+.bc-foot{grid-column:1/-1;grid-row:3;display:flex;align-items:center;gap:20px;min-width:0;padding:0 20px;background:var(--room);border-top:1px solid var(--line-soft);
+  font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+.bc-state{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+.bc-state.bad{color:var(--danger)}
+.bc-where{margin-left:auto;white-space:nowrap}
+
+/* the bar: the tabs over the contents, the page tools over the pages, Check and Export at the end. Every control is
+   32 px tall, so their edges and their text share one line. Nothing in it shrinks: when it doesn't fit, book-compose.js
+   folds it a step at a time (data-fold on .bc), each step written out below. */
+.bc-bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;min-width:0;overflow:hidden;background:var(--room);border-bottom:1px solid var(--line-soft)}
+.bc-tabs{display:flex;gap:24px;flex:none;align-self:stretch;width:var(--bc-l);padding:0 20px}
+.bc-tabs a{display:flex;align-items:center;padding-top:2px;border-bottom:2px solid transparent;margin-bottom:-1px;text-decoration:none;white-space:nowrap;
+  font:600 11px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--fog)}
+.bc-tabs a:hover{color:var(--paper)}
+.bc-tabs a[aria-selected="true"]{color:var(--paper);border-bottom-color:var(--red)}
+.bc-tools{display:flex;align-items:center;gap:12px;flex:1 0 auto;padding:0 16px}
+.bc-acts{display:flex;align-items:center;gap:8px;flex:none;padding:0 20px 0 8px}
+.bc:not(.nopanel) .bc-acts{padding-right:calc(20px + var(--bc-gutter))}
+.bc-bar .select,.bc-bar .input{height:32px;padding:0 10px;font:500 13px/1 var(--sans)}
+.bc-bar .select{width:auto;padding-right:28px}
+.bc-trim{display:flex;align-items:center;gap:8px;flex:none}
+.bc-trim .bc-custom{display:flex;align-items:center;gap:6px}
+.bc-trim .bc-custom[hidden]{display:none}
+.bc-trim .bc-num{width:76px}
+.bc-times{color:var(--fog)}
+.bc-bar .seg{height:32px;flex:none}
+.bc-bar .seg button{padding:0 12px;font-size:11px;white-space:nowrap}
+.bc-bar .btn{height:32px;padding:0 12px}
+.bc-check{font-variant-numeric:tabular-nums}
+.bc-zoom{display:inline-flex;flex:none;height:32px;border:1px solid var(--line)}
+.bc-zoom button{display:grid;place-items:center;min-width:30px;height:30px;padding:0;background:none;border:0;color:var(--fog);cursor:pointer;font:400 17px/1 var(--sans)}
+.bc-zoom button:hover{color:var(--paper)}
+.bc-zoom .bc-zl{min-width:92px;padding:0 10px;border-left:1px solid var(--line-soft);border-right:1px solid var(--line-soft);
+  font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--paper);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bc-zl-s{display:none}
+.bc-tog{height:32px;padding:0 0 0 12px;background:none;border:0;font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bc-tog:hover,.bc-tog[aria-pressed="true"]{color:var(--paper)}
+/* the folds: 1 tighter spacing; 2 Check names only what is to fix (or to look at); 3 the zoom as a percentage, its
+   names in the menu; 4 Check alone, its counts in the tooltip and the panel; 5 Spreads | Pages into the zoom menu;
+   6 the trim size only in the design panel */
+.bc[data-fold] .bc-tools{gap:8px;padding:0 12px}
+/* the tabs keep their spacing in every fold: they sit where the writing window has them (book.css .bw-tabs) */
+.bc[data-fold] .bc-acts{gap:6px;padding-left:0}
+.bc[data-fold] .bc-bar .btn{padding:0 10px}
+.bc[data-fold="2"] .bc-ck-2,.bc[data-fold="3"] .bc-ck-2,.bc[data-fold="4"] .bc-ck,.bc[data-fold="5"] .bc-ck,.bc[data-fold="6"] .bc-ck{display:none}
+.bc[data-fold="3"] .bc-zl-l,.bc[data-fold="4"] .bc-zl-l,.bc[data-fold="5"] .bc-zl-l,.bc[data-fold="6"] .bc-zl-l{display:none}
+.bc[data-fold="3"] .bc-zl-s,.bc[data-fold="4"] .bc-zl-s,.bc[data-fold="5"] .bc-zl-s,.bc[data-fold="6"] .bc-zl-s{display:inline}
+.bc[data-fold="3"] .bc-zoom .bc-zl,.bc[data-fold="4"] .bc-zoom .bc-zl,.bc[data-fold="5"] .bc-zoom .bc-zl,.bc[data-fold="6"] .bc-zoom .bc-zl{min-width:58px}
+.bc[data-fold="5"] .bc-mode,.bc[data-fold="6"] .bc-mode,.bc[data-fold="6"] .bc-trim{display:none}
+
+/* the contents: the binder's rows as buttons, each with the page it starts on */
+.bc-contents .bb-a{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left}
+.bc-contents .bb-a:disabled{cursor:default}
+.bc-contents .bb-a:disabled .bb-t{color:var(--fog)}
+.bc-contents .bb-row.auto .bb-a:not(:disabled):hover .bb-t,.bc-contents .bb-a:not(:disabled):hover .bb-t{color:var(--paper-hot)}
+.bc-contents .bb-w{min-width:2.5em}
+/* a generated page left out of the pages (its feature is off, or it has nothing to list): its name, and beneath it
+   that it isn't there; the tooltip says why */
+.bc-contents .bb-out{display:block;margin-top:5px;font:500 12px/1 var(--sans);letter-spacing:.01em;color:var(--fog)}
+
+/* ——— the side panel: the rail's head, then sections. The head scrolls with the panel, staying on top (as the
+   binder's does), so the panel's scrollbar narrows both alike ——— */
+.bc-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.bc-head{position:sticky;top:0;z-index:2;background:var(--room)}
+.bc-body{padding:0 20px 28px;font:400 14px/1.45 var(--sans)}
+.bc-body .input,.bc-body .select{height:34px;padding:0 9px;font:400 14px/1 var(--sans)}
+.bc-body .label{margin:0 0 6px}
+.bc-body .hint{margin:6px 0 0;font-size:12px;line-height:1.45}
+.bc-body .switch{font-size:14px;line-height:1.35}
+.bc-body .seg{display:flex;width:100%}
+.bc-body .seg button{flex:1 1 0;min-width:0;height:32px;padding:0 6px;font-size:10.5px;letter-spacing:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bc-tpl{padding:18px 0 20px;border-bottom:1px solid var(--line-soft)}
+.bc-sec{border-bottom:1px solid var(--line-soft)}
+.bc-sh{display:flex;align-items:center;gap:12px;height:46px}
+.bc-st{display:flex;align-items:center;gap:10px;flex:1;min-width:0;height:100%;padding:0;background:none;border:0;cursor:pointer;text-align:left;
+  font:600 11px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--paper)}
+.bc-st::before{content:"";flex:none;width:5px;height:5px;margin:0 1px 2px;border-right:1.5px solid var(--fog);border-bottom:1.5px solid var(--fog);transform:rotate(-45deg);transition:transform .15s var(--ease)}
+.bc-st[aria-expanded="true"]::before{transform:rotate(45deg)}
+.bc-sb{padding:2px 0 18px}
+.bc-rs{display:flex;justify-content:flex-end}
+.bc-rs .bm-btn:disabled{opacity:.4;cursor:default}
+.bc-rs .bm-btn:disabled:hover{color:var(--fog)}
+.bc-f{display:block;min-width:0;margin:0 0 16px}
+.bc-2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px}
+.bc-2>.bc-f{margin-bottom:16px}
+.bc-sb>.bc-2:has(+ .bc-min){margin-bottom:-8px}
+.bc-min{margin:0 0 16px!important}
+.bc-num{position:relative;display:block;min-width:0}
+.bc-num .input{width:100%;padding-right:34px;font-variant-numeric:tabular-nums}
+.bc-u{position:absolute;right:9px;top:50%;transform:translateY(-50%);font:500 12px/1 var(--sans);color:var(--fog);pointer-events:none}
+.bc-sb .bc-custom{margin-top:8px}
+.bc-labels{display:flex;flex-direction:column;gap:8px}
+.bc-lab{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:10px;align-items:center;font-size:13px;color:var(--paper-dim)}
+
+/* the checks */
+.bc-ck-acts{display:flex;align-items:center;gap:12px;padding:18px 0 4px}
+.bc-ck-acts .hint{margin:0}
+.bc-ck-g{margin-top:20px}
+.bc-ck-g .label{margin:0 0 8px}
+.bc-ck-g .br-list{border-top:1px solid var(--line-soft)}
+.bc-item{padding:0 0 0 14px}
+.bc-item::after{content:"";position:absolute;left:0;top:16px;width:6px;height:6px;background:var(--fog)}
+.bc-item.fail::after{background:var(--red)}
+.bc-item.warn::after{background:var(--paper-dim)}
+.bc-item.info::after{background:transparent;border:1px solid var(--fog);width:4px;height:4px}
+.bc-item .br-li,.bc-item-t{font:400 13px/1.45 var(--sans);color:var(--paper-dim)}
+.bc-item .br-li:hover{color:var(--paper)}
+.bc-item-t{margin:0;padding:10px 0}
+.bc-item-p{font-weight:600;color:var(--paper);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bc-show{display:block;margin:-4px auto 10px 0}
+
+/* the export dialog */
+.bc-xs{margin:0;padding:14px 0;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);font-size:15px;color:var(--paper-dim)}
+.bc-xs b{color:var(--paper);font-weight:600}
+
+/* ——— the page viewer ——— */
+.bp-desk{position:relative;flex:1;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--desk);scrollbar-gutter:stable;outline:none}
+.bp-desk:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+.bp-pages{display:flex;flex-direction:column;align-items:center;gap:var(--bp-gap);width:max-content;min-width:100%;padding:var(--bp-pad);box-sizing:border-box}
+.bp-row{position:relative;display:flex}
+.bp-slot{position:relative;width:var(--bp-pw);height:calc(var(--bp-ph) + var(--bp-label))}
+.bp-page{position:relative;z-index:1;width:var(--bp-pw);height:var(--bp-ph);background:var(--bp-paper);isolation:isolate}
+/* Typst draws each page on white; multiplied onto the paper's colour, white becomes the paper and black stays black,
+   as ink on cream paper does */
+.bp-page img{display:block;width:100%;height:100%;user-select:none;mix-blend-mode:multiply}
+.bp-page img:not([src]){visibility:hidden}
+/* a lone page has its own edge; a spread's two pages share one, so the spine shows no seam */
+.bp-row:not(.spread) .bp-page{box-shadow:0 0 0 1px var(--page-edge),0 2px 7px var(--page-shade)}
+.bp-row.spread::before{content:"";position:absolute;top:0;left:0;right:0;height:var(--bp-ph);box-shadow:0 0 0 1px var(--page-edge),0 2px 7px var(--page-shade);pointer-events:none}
+.bp-row.spread.r::before{left:50%}
+.bp-row.spread.l::before{right:50%}
+/* the page marked: a rule just inside its edges, so it never reaches over the spine onto the facing page */
+.bp-page.mark::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 2px var(--red);pointer-events:none}
+.bp-folio{position:absolute;left:0;right:0;top:var(--bp-ph);height:var(--bp-label);display:flex;align-items:flex-end;justify-content:center;
+  font:500 11px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.bp-folio.quiet{opacity:.55}
+.bp-say{position:absolute;top:38%;left:0;right:0;margin:0;text-align:center;font:400 15px/1.5 var(--sans);color:var(--fog)}
+
+@media (prefers-reduced-motion:reduce){.bc-st::before{transition:none}}

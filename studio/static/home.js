@@ -58,6 +58,6 @@ function renderHomePage() {
 
 async function showHomePage() {
   state.view = "homepage"; setNav("home"); document.title = "Studio";
-  try { const d = await loadHome(); state.stamp = d.stamp; renderHomePage(); }
-  catch (e) { app.innerHTML = `<p class="empty">Couldn't read the library: ${esc(e.message)}</p>`; }
+  try { const d = await loadHome(); if (state.view !== "homepage") return; state.stamp = d.stamp; renderHomePage(); }      // went elsewhere meanwhile
+  catch (e) { if (state.view === "homepage") app.innerHTML = `<p class="empty">Couldn't read the library: ${esc(e.message)}</p>`; }
 }

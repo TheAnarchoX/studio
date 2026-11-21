@@ -1,14 +1,16 @@
 "use strict";
 /* The writing window's tools (book-editor.js tells them what happens through BookTools.on): the writing tools in the
    status bar (read aloud, echoes, sentence rhythm, the daily goal line), the style sheet's marks in the text, the
-   highlights of find and replace, focus mode with typewriter scrolling, a second pane (split view) and the command
-   palette (Ctrl+K). The rail's panels are book-rail.js.
+   highlights of find and replace, focus mode with typewriter scrolling, a second pane (split view) or, in its place, the
+   pages beside the text (book-pages.js), the command palette (Ctrl+K) and the Keys and tools sheet (Ctrl+/). The status
+   bar shows them: Pieces · Split · Pages on the left, the writing tools and Commands on the right. The rail's panels
+   are book-rail.js.
    A classic script after book-editor.js; sets window.BookTools. The helpers at the top touch no DOM, so
    tests/js/book_tools.js runs them in node. */
 (function (root) {
   const BT = root.BookText;
   const {Plugin, PluginKey, Decoration, DecorationSet, NodeSelection, TextSelection} = root.PM;
-  const GAP = "￼";             // an inline node that isn't text (a note, a citation), as the server's search writes it
+  const GAP = "￼";             // an inline node that isn't text (a note, a citation, math), as the server's search writes it
 
   /* ——— helpers (no DOM) ——— */
 
@@ -255,20 +257,27 @@
     return out;
   }
 
-  /* History: the text of a piece as blocks (document JSON), notes and citations as they read in Markdown. */
+  /* History: the text of a piece as blocks (document JSON), notes, citations and math as they read in Markdown; a table
+     row by row, its cells joined by ` | ` (manuscript.plain_text). */
   const inlinePlain = content => (content || []).map(n => n.type === "text" ? n.text || "" : n.type === "hard_break" ? "\n"
     : n.type === "note" ? `^[${inlinePlain(n.content)}]`
     : n.type === "cite" ? `[${((n.attrs && n.attrs.items) || []).map(i => [i.prefix, "@" + i.key + (i.locator ? ", " + i.locator : "")].filter(Boolean).join(" ")).join("; ")}]`
+    : n.type === "math" ? "$" + ((n.attrs && n.attrs.tex) || "") + "$"
     : "").join("");
   function plainBlocks(doc) {
     const out = [];
     const walk = n => {
       const t = n.type, a = n.attrs || {};
-      if (t === "title" || t === "heading" || t === "paragraph" || t === "attribution") out.push(inlinePlain(n.content));
-      else if (t === "blockquote" || t === "epigraph" || (t === "poem" && !a.src)) (n.content || []).forEach(walk);
+      if (t === "title" || t === "heading" || t === "paragraph" || t === "list_item" || t === "attribution") out.push(inlinePlain(n.content));
+      else if (t === "blockquote" || t === "aligned" || t === "epigraph" || (t === "poem" && !a.src)) (n.content || []).forEach(walk);
       else if (t === "poem") out.push(`Linked poem: ${a.src}`);
+      else if (t === "table") (n.content || []).forEach(r => {
+        const cells = (r.content || []).map(c => inlinePlain(c.content));
+        if (cells.some(Boolean)) out.push(cells.join(" | "));
+      });
       else if (t === "scene_break") out.push("* * *");
       else if (t === "page_break") out.push("Page break");
+      else if (t === "math_display") out.push("$$" + (a.tex || "") + "$$");
       else if (t === "image") out.push(`Image: ${a.alt || a.src || ""}`);
     };
     ((doc && doc.content) || []).forEach(walk);
@@ -337,13 +346,14 @@
     return null;
   }
 
-  /* Room for the text: every text column at least 360 px. Things give way in order: the list of pieces (unless it is
-     what was just asked for), then the page's side gutters and the notes margin (tight), then the rhythm's gutter
-     (compact). measure(state) gives the narrowest text column for a state {binder, tight, compact}. {state, fits}: the
-     most generous state that fits, or the tightest when nothing does (the request is then refused). */
+  /* Room for the text: every text column at least 360 px. Things give way in order: the names beside the rail's icons
+     (labels, while a panel is open), the list of pieces (unless it is what was just asked for), then the page's side
+     gutters and the notes margin (tight), then the rhythm's gutter (compact). measure(state) gives the narrowest text
+     column for a state {binder, tight, compact, labels?}. {state, fits}: the most generous state that fits, or the
+     tightest when nothing does (the request is then refused). */
   const FLOOR = 360;
-  function giveWay(measure, {binder, rhythm, keepBinder = false, floor = FLOOR}) {
-    const steps = [{binder, tight: false, compact: false}];
+  function giveWay(measure, {binder, rhythm, labels = false, keepBinder = false, floor = FLOOR}) {
+    const steps = [...(labels ? [{binder, tight: false, compact: false, labels: true}] : []), {binder, tight: false, compact: false}];
     if (binder && !keepBinder) steps.push({binder: false, tight: false, compact: false});
     const b = steps[steps.length - 1].binder;
     steps.push({binder: b, tight: true, compact: false});
@@ -351,13 +361,44 @@
     for (const s of steps) if (measure(s) >= floor) return {state: s, fits: true};
     return {state: steps[steps.length - 1], fits: false};
   }
-  /* what is said when a request doesn't fit: split, panel, rhythm, binder (the list of pieces) */
-  function noRoom(request, {split, panel} = {}) {
-    const close = [panel && request !== "panel" ? "the panel" : "", split && request !== "split" ? "the second pane" : ""].filter(Boolean).join(" or ");
-    const what = {split: panel ? "two pieces beside the panel" : "two pieces side by side", panel: split ? "the panel beside two pieces" : "the panel",
+  /* what is said when a request doesn't fit: split, pages (beside the text), panel, rhythm, binder (the list of pieces) */
+  function noRoom(request, {split, panel, pages} = {}) {
+    const close = [panel && request !== "panel" ? "the panel" : "", split && request !== "split" ? "the second pane" : "",
+      pages && request !== "pages" ? "the pages" : ""].filter(Boolean).join(" or ");
+    const what = {split: panel ? "two pieces beside the panel" : "two pieces side by side", pages: "the pages beside the text",
+      panel: split ? "the panel beside two pieces" : pages ? "the panel beside the text and the pages" : "the panel",
       rhythm: "the rhythm's bars", binder: "the list of pieces"}[request];
     const fix = ["rhythm", "binder"].includes(request) ? "Close the panel or the second pane, or widen the window." : close ? `Close ${close}, or widen the window.` : "Widen the window.";
     return `There isn't room for ${what} at this width. ${fix}`;
+  }
+  /* The second pane's slot holds one thing: a second piece ("split") or the pages beside the text ("pages"). What has to
+     go before `kind` opens there: the other one, when it is there; null when the slot is free or holds it already. */
+  const pairedPane = (kind, current) => current && current !== kind ? current : null;
+  /* The pages in view, by their page numbers: the spread of page i (0-based; page 1 alone on the right), or the page.
+     A blank page has no number; when none of them has one, where they are in the book. */
+  function pagesWhere(pages, i, spreads = true) {
+    if (!pages?.length || !(i >= 0 && i < pages.length)) return "";
+    let a = i, z = i;
+    if (spreads) { a = i % 2 ? i : Math.max(0, i - 1); z = i % 2 ? Math.min(pages.length - 1, i + 1) : i; if (i === 0) a = z = 0; }
+    const named = [...new Set([a, z])].map(k => pages[k].folio).filter(Boolean);
+    return named.length === 2 ? `Pages ${named[0]}–${named[1]}` : named.length ? `Page ${named[0]}`
+      : a === z ? `Page ${a + 1} of ${pages.length}` : `Pages ${a + 1}–${z + 1} of ${pages.length}`;
+  }
+  /* The Keys and tools sheet: the window's own tools (book.js's BOOK_KEYS: [group, [[tool, keys, what, words?]]]), then
+     the format commands that have a key (BookFormat.KEYS, {label, key, group}, when that is loaded), leaving out a key
+     listed already. A tool given as a list of names is the rail's panels: only those this book has (`panels`, the
+     rail's names, when known), the row left out when it has none. `words` stand where a tool has no keys. */
+  function keyGroups(own, format, panels) {
+    const norm = k => String(k || "").toLowerCase().replace(/\s+/g, ""), seen = new Set();
+    (own || []).forEach(([, rows]) => rows.forEach(r => { if (r[1]) seen.add(norm(r[1])); }));
+    const has = new Set(panels || []);
+    const groups = (own || []).map(([name, rows]) => [name, rows.map(r => {
+      if (!Array.isArray(r[0])) return r;
+      const names = panels ? r[0].filter(n => has.has(n)) : r[0];
+      return names.length ? [names.join(", "), ...r.slice(1)] : null;
+    }).filter(Boolean)]);
+    const more = (Array.isArray(format) ? format : []).filter(r => r && r.key && r.label && !seen.has(norm(r.key))).map(r => [r.label, r.key, r.group || ""]);
+    return more.length ? [...groups, ["Formatting", more]] : groups;
   }
   /* Sentence rhythm's scale, the same in every layout: 1 px a word up to 40 words (20 when compact), 12 px from the text;
      its gutter before the text is 56 px (36 compact), kept by book-tools.css (.bt-rg) while Rhythm is on */
@@ -367,8 +408,9 @@
   /* A change on disk to pieces open in the editor (replace, restore): every editor and field of each piece is locked and
      the piece busy (the poll leaves it alone); saves under way land and what is typed is saved; a save that fails stops
      it all before anything changes. After the change each piece is read again, as one change undo can take back, unless
-     it was changed meanwhile after all: then it gets the conflict bar (Reload or Keep mine), so nothing is read over. */
-  async function guarded(pieces, run, {settled, by} = {}) {
+     it was changed meanwhile after all: then it gets the conflict bar (Reload or Keep mine), so nothing is read over.
+     keep: the text the reload replaces is offered back (Put it back); an accepted suggestion's isn't (it's in History). */
+  async function guarded(pieces, run, {settled, by, keep = true} = {}) {
     pieces = pieces.filter(p => p && p.text && !p.closed);
     for (const p of pieces) { p.busy = true; p.text.lock(true); }
     try {
@@ -380,7 +422,7 @@
       for (const p of pieces) {
         if (p.closed) continue;
         if (p.dirty) { p.conflict = p.conflict || (by ? {by} : {}); p.win.bar(p); p.win.status(); }
-        else await p.reload(false);
+        else await p.reload(false, {keep});
       }
       return out;
     } finally {
@@ -409,11 +451,6 @@
     return out;
   }
 
-  const helpers = {fold, wordsIn, echoes, ECHO_STOP, TOOLS, numberWord, numberIssues, termIssues, quoteIssues, styleIssues, sentences,
-    fuzzy, rank, parseAuthors, formatAuthors, sourceKey, dateText, dateParts, sourceItem, whereOpen, guarded, findIn, plainBlocks,
-    diffBlocks, outline, short, squash, primary, giveWay, noRoom, rhythmBar, RHYTHM, FLOOR, GAP};
-  if (typeof document === "undefined") { root.BookTools = helpers; return; }          // node: the helpers only
-
   /* ——— the text as containers: where text lives in a document, in the server's order (books._containers) ——— */
   function inlineText(node, start, lang) {
     let text = "", own = "", p = start;
@@ -432,19 +469,27 @@
     at.push(p);
     return {text, own, at};
   }
+  /* a table cell is text, after the cells before it (row by row, left to right) */
   function containersOf(doc, lang) {
     const out = [];
     const walk = (n, pos, inPoem) => {
       const t = n.type.name;
-      if (t === "title" || t === "heading" || t === "paragraph" || t === "attribution") {
+      if (t === "title" || t === "heading" || t === "paragraph" || t === "list_item" || t === "attribution" || t === "table_cell") {
         out.push({kind: "text", node: n, pos, inPoem, ...inlineText(n, pos + 1, lang)});
         n.forEach((c, off) => { if (c.type.name === "note") out.push({kind: "note", node: c, pos: pos + 1 + off, ...inlineText(c, pos + 2 + off, lang)}); });
-      } else if (t === "blockquote" || t === "epigraph" || t === "poem") n.forEach((c, off) => walk(c, pos + 1 + off, inPoem || t === "poem"));
-      else if (t === "image" && n.attrs.alt) out.push({kind: "caption", node: n, pos, text: n.attrs.alt, at: null});
+      } else if (t === "blockquote" || t === "aligned" || t === "epigraph" || t === "poem" || t === "table" || t === "table_row") {
+        n.forEach((c, off) => walk(c, pos + 1 + off, inPoem || t === "poem"));
+      } else if (t === "image" && n.attrs.alt) out.push({kind: "caption", node: n, pos, text: n.attrs.alt, at: null});
     };
     doc.forEach((c, off) => walk(c, off, false));
     return out;
   }
+
+  const helpers = {fold, wordsIn, echoes, ECHO_STOP, TOOLS, numberWord, numberIssues, termIssues, quoteIssues, styleIssues, sentences,
+    fuzzy, rank, parseAuthors, formatAuthors, sourceKey, dateText, dateParts, sourceItem, whereOpen, guarded, findIn, plainBlocks,
+    diffBlocks, outline, short, squash, primary, giveWay, noRoom, rhythmBar, RHYTHM, FLOOR, GAP, inlineText, containersOf,
+    pairedPane, pagesWhere, keyGroups};
+  if (typeof document === "undefined") { root.BookTools = helpers; return; }          // node: the helpers only
 
   /* ——— the window's tools ——— */
   const R = {W: null, focus: false, focusPane: null, active: null, reading: null, find: null, pal: null, prefs: {}, typedAt: 0, sheetKey: ""};
@@ -465,7 +510,8 @@
     state: {init: () => DecorationSet.empty, apply: (tr, set) => { const m = tr.getMeta(key); return m !== undefined ? m : tr.docChanged ? set.map(tr.mapping, tr.doc) : set; }},
     props: {decorations: state => key.getState(state)}});
   function plugins(T) {
-    return [decoPlugin(KEYS.echo), decoPlugin(KEYS.style), decoPlugin(KEYS.find), new Plugin({
+    // Claude's suggestions (book-suggest.js) before the plugin below: right-click on their words is theirs, not the style sheet's
+    return [decoPlugin(KEYS.echo), decoPlugin(KEYS.style), decoPlugin(KEYS.find), ...(root.BookSuggest?.plugins ? root.BookSuggest.plugins(T) : []), new Plugin({
       props: {
         decorations: state => focusDecos(T, state),
         handleDOMEvents: {
@@ -559,7 +605,7 @@
       const doc = view.state.doc !== prev.doc, sel = !view.state.selection.eq(prev.selection);
       if (doc) { this.boxes = null; this.schedule(); this.hideTip(); }        // positions from before the change are not used
       else if (sel) this.showTip();
-      if (sel || doc) { this.markSentence(); R.rail?.changed(this.T, doc); }
+      if (sel || doc) { this.markSentence(); R.rail?.changed(this.T, doc); Pages.moved(); }
       if ((doc || sel) && R.focus && performance.now() - R.typedAt < 200 && view.hasFocus()) requestAnimationFrame(() => typewriter(this.T, true));
     }
     destroy() {
@@ -677,18 +723,41 @@
   /* work every text's decorations out again (a tool switched, the style sheet or the find changed) */
   const recompute = (ms = 0) => texts().forEach(T => T.tools?.schedule(ms));
 
-  /* ——— the writing tools in the status bar, and the daily goal line ——— */
+  /* ——— the status bar: Pieces · Split · Pages on the left; the writing tools, then Commands, on the right; the daily
+     goal as a line along its top ——— */
   function mountTools() {
     const foot = R.W.root.querySelector(".bw-status");
+    const btn = (slot, label, title) => { const b = el("button", "bw-tog", label); b.type = "button"; b.dataset.slot = slot; b.title = title; return b; };
+    R.splitEl = btn("split", "Split", "");
+    R.pagesEl = btn("pages", "Pages", "");
+    foot.querySelector(".bw-status > .bw-tog").after(R.splitEl, R.pagesEl);
     R.toolsEl = el("span", "bw-tools");
     R.toolsEl.setAttribute("role", "group"); R.toolsEl.setAttribute("aria-label", "Writing tools");
     R.toolsEl.innerHTML = TOOLS.map(([id, label, title]) => `<button type="button" class="bw-tog" data-tool="${id}" aria-pressed="false" title="${esc(title)}">${esc(label)}</button>`).join("");
     R.toolsEl.addEventListener("mousedown", e => { if (e.target.closest("[data-tool]")) e.preventDefault(); });      // the text keeps the focus
     R.toolsEl.addEventListener("click", e => { const b = e.target.closest("[data-tool]"); if (b) toggleTool(b.dataset.tool); });
+    const cmds = btn("commands", "Commands", "Go to a piece or run an action · Ctrl+K");
     R.goalEl = el("i", "bw-goal");
     R.goalEl.setAttribute("aria-hidden", "true");
-    foot.append(R.toolsEl, R.goalEl);
+    foot.append(R.toolsEl, cmds, R.goalEl);
+    foot.addEventListener("mousedown", e => { if (e.target.closest("[data-slot]")) e.preventDefault(); });      // the text keeps the focus (and the palette goes back to it)
+    foot.addEventListener("click", e => {
+      const s = e.target.closest("[data-slot]")?.dataset.slot;
+      if (s === "split") { if (R.W.split) Split.close(); else Palette.open("beside"); }       // nothing beside: which piece?
+      else if (s === "pages") Pages.toggle();
+      else if (s === "commands") Palette.open();
+    });
     paintTools();
+    paintSlot();
+  }
+  /* Split and Pages say what the second pane's slot holds */
+  function paintSlot() {
+    if (!R.splitEl) return;
+    const split = !!R.W?.split, pages = !!R.pp;
+    R.splitEl.setAttribute("aria-pressed", String(split));
+    R.splitEl.title = split ? "Close the second pane · Esc" : "Open a piece beside this one · Alt+click a piece";
+    R.pagesEl.setAttribute("aria-pressed", String(pages));
+    R.pagesEl.title = pages ? "Hide the pages · Ctrl+Shift+P" : "Show the pages beside the text · Ctrl+Shift+P";
   }
   function paintTools() {
     if (!R.toolsEl) return;
@@ -803,7 +872,8 @@
       p.hosts.page.classList.toggle("bt-rg", !!R.prefs.rhythm && !!file && form !== "poem");
     }
   }
-  /* request: "split", "panel", "rhythm", "binder" (the author showed the list: it doesn't give way), or none. true: fits */
+  /* request: "split", "pages", "panel", "rhythm", "binder" (the author showed the list: it doesn't give way), or none.
+     true: fits */
   function fit(request) {
     const W = R.W;
     if (!W) return true;
@@ -811,9 +881,10 @@
     if (R.focus) return true;                  // one text, centred
     const root = W.root, apply = s => {
       root.classList.toggle("nobinder", !s.binder); root.classList.toggle("tight", s.tight); root.classList.toggle("compact", s.compact);
+      root.classList.toggle("labels", !!s.labels);          // the names beside the rail's icons (book-tools.css)
     };
-    const {state: s, fits} = giveWay(st => { apply(st); return narrowest(); },
-      {binder: request === "binder" || binderWish(), rhythm: !!R.prefs.rhythm, keepBinder: request === "binder"});
+    const {state: s, fits} = giveWay(st => { apply(st); return narrowest(); }, {binder: request === "binder" || binderWish(),
+      rhythm: !!R.prefs.rhythm, labels: root.classList.contains("railopen"), keepBinder: request === "binder"});
     apply(s);
     paintPieces();
     texts().forEach(T => T.tools?.scheduleRhythm(0));
@@ -823,12 +894,25 @@
   let resizeTimer = 0;
   addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (R.W && !fit() && R.W.root.classList.contains("railopen")) { R.rail?.close(); fit(); } }, 120);
+    resizeTimer = setTimeout(() => {
+      if (!R.W || fit()) return;
+      const panel = () => R.W.root.classList.contains("railopen");
+      // the pages beside the text close first, saying what would bring them back
+      if (R.pp) { const was = panel(); Pages.close(false); toast(noRoom("pages", {panel: was}), true); if (fit()) return; }
+      if (panel()) { R.rail?.close(); fit(); }
+    }, 120);
   });
+
+  /* What the second pane's slot holds (a second piece or the pages), out of sight while the other is tried there: its
+     section and the head it put over the first pane */
+  const putAside = (x, on) => { x.sec.hidden = on; x.mainHead.hidden = on; };
 
   /* ——— split view: a second pane with its own piece, saved as the first is (book-editor's Piece) ——— */
   const Split = {
     build(file) {
+      // one slot: the pages beside the text are put aside while two pieces are tried, and go only once they fit
+      const pp = pairedPane("split", slot()) === "pages" ? R.pp : null;
+      if (pp) putAside(pp, true);
       const W = R.W, main = W.root.querySelector(".bw-main");
       const head = el("header", "bw-ph");
       head.innerHTML = `<span class="bw-ph-t"></span><span class="state"></span>`;
@@ -855,8 +939,11 @@
       if (!fit("split")) {          // two texts of 360 px don't fit: the pane goes again, and says so
         toast(noRoom("split", {panel: W.root.classList.contains("railopen")}), true);
         Split.close(false);
+        if (pp) { putAside(pp, false); fit(); }         // the pages are back as they were
         return null;
       }
+      if (pp) Pages.close(false);
+      paintSlot();
       return P;
     },
     /* the look's font, from the first pane's page */
@@ -916,9 +1003,11 @@
       cancelAnimationFrame(P.frame);
       P.sec.remove(); P.mainHead.remove();
       W.split = null;
-      W.root.classList.remove("split", "focus-split");
+      W.root.classList.remove("focus-split");
+      if (!R.pp) W.root.classList.remove("split");       // the pages, tried in its place, keep the slot's layout
       fit();
       if (R.active === P) R.active = W;
+      paintSlot();
       W.status();
       if (refocus) W.piece?.text?.focus();
       R.rail?.pieceChanged();
@@ -931,12 +1020,130 @@
       P.frame = requestAnimationFrame(() => {
         P.frame = 0;
         if (R.W?.split !== P) return;
-        for (const [head, p] of [[P.head, P.piece], [P.mainHead, R.W.piece]]) {
-          head.querySelector(".bw-ph-t").textContent = p ? p.name : "";
-          const st = head.querySelector(".state"), say = !p?.text ? "" : p.conflict || p.failed ? "Not saved" : p.saving ? "Saving…" : p.dirty ? "Unsaved changes" : "Saved";
-          st.textContent = say;
-          st.classList.toggle("dirty", say === "Unsaved changes" || say === "Not saved");
-        }
+        for (const [head, p] of [[P.head, P.piece], [P.mainHead, R.W.piece]]) paintHead(head, p);
+      });
+    },
+  };
+  /* a pane's head: its piece, and whether it is saved */
+  function paintHead(head, p) {
+    head.querySelector(".bw-ph-t").textContent = p ? p.name : "";
+    const st = head.querySelector(".state"), say = !p?.text ? "" : p.conflict || p.failed ? "Not saved" : p.saving ? "Saving…" : p.dirty ? "Unsaved changes" : "Saved";
+    st.textContent = say;
+    st.classList.toggle("dirty", say === "Unsaved changes" || say === "Not saved");
+  }
+
+  /* ——— the pages beside the text: the book as it is set (GET /api/book/pages, shown by book-pages.js) in the second
+     pane's slot, a spread at the pane's width. The spread of the cursor's paragraph shows, its page marked; the pages are
+     asked for again after every save of an open piece and when the book changes on disk; a click on a page opens Compose
+     there. Like a second piece they need the text to keep 360 px: they don't open, or close with a word, when it wouldn't. ——— */
+  const slot = () => R.W?.split ? "split" : R.pp ? "pages" : null;
+  const Pages = {
+    open() {
+      const W = R.W;
+      if (!W || R.pp || !root.BookPages) return;
+      if (R.focus) setFocus(false);
+      // one slot: a second piece is put aside while the pages are tried, and goes only once they fit
+      const sp = pairedPane("pages", slot()) === "split" ? W.split : null;
+      if (sp) putAside(sp, true);
+      const main = W.root.querySelector(".bw-main"), mainHead = el("header", "bw-ph");
+      mainHead.innerHTML = `<span class="bw-ph-t"></span><span class="state"></span>`;
+      main.prepend(mainHead);
+      const sec = el("section", "bw-main bw-split bw-pp");
+      sec.setAttribute("aria-label", "Pages");
+      sec.innerHTML = `<header class="bw-ph"><span class="bw-ph-t">Pages</span><span class="state"></span>
+          <button type="button" class="bw-tog bw-ph-x" title="Hide the pages · Ctrl+Shift+P">Close</button></header><div class="bw-pp-desk"></div>`;
+      main.after(sec);
+      W.root.classList.add("split", "pages");
+      const P = R.pp = {W, sec, mainHead, head: sec.querySelector(".bw-ph"), viewer: null, data: null, at: -1, page: -1,
+        loading: false, slow: false, again: false, error: null, timer: 0, frame: 0};
+      sec.querySelector(".bw-ph-x").addEventListener("click", () => Pages.close());
+      if (!fit("pages")) {          // the text would be under 360 px: they go again, and say so
+        Pages.close(false);
+        if (sp) { putAside(sp, false); fit(); }         // the second piece is back as it was
+        toast(noRoom("pages", {panel: W.root.classList.contains("railopen")}), true);
+        return;
+      }
+      if (sp) Split.close();
+      // "Setting the pages…" is said once, in the head, and only when the answer is slow (load)
+      P.viewer = root.BookPages.mount(sec.querySelector(".bw-pp-desk"), {book: W.book, mode: "spreads", zoom: "width",
+        hint: "Open Compose at this page", refetch: () => Pages.load(),
+        onClick: i => { location.hash = bookComposeHash(W.book.id, i + 1); },
+        onPage: i => { P.page = i; Pages.paint(); }});
+      paintSlot();
+      Pages.paint();
+      Pages.load();
+    },
+    close(refocus = true) {
+      const P = R.pp;
+      if (!P) return;
+      R.pp = null;
+      clearTimeout(P.timer); cancelAnimationFrame(P.frame);
+      P.viewer?.destroy();
+      P.sec.remove(); P.mainHead.remove();
+      P.W.root.classList.remove("pages");
+      if (!P.W.split) P.W.root.classList.remove("split");      // a second piece, tried in their place, keeps the slot's layout
+      if (R.W !== P.W) return;
+      fit();
+      paintSlot();
+      if (refocus) activePiece()?.text?.focus();
+    },
+    toggle() { if (R.pp) Pages.close(); else Pages.open(); },
+    /* One request at a time; a save or a change meanwhile asks once more after it. The viewer keeps every page whose
+       image didn't change. */
+    async load() {
+      const P = R.pp;
+      if (!P?.viewer) return;
+      if (P.loading) { P.again = true; return; }
+      P.loading = true; P.again = false;
+      const slow = setTimeout(() => { if (R.pp === P && P.loading) { P.slow = true; Pages.paint(); } }, 150);      // a quick answer doesn't flicker
+      P.words = root.BookPages.SETTING;           // or the font being cut for print (book-pages.js)
+      const stopWatch = root.BookPages.watchSetting(P.W.book.id, w => { if (R.pp === P && P.loading) { P.words = w; Pages.paint(); } });
+      try {
+        const r = await api("/api/book/pages?b=" + encodeURIComponent(P.W.book.id));
+        if (R.pp !== P) return;
+        P.error = null; P.data = r;
+        P.viewer.show(r);
+        if (!r.count) P.viewer.message(r.error ? `The book can't be set: ${plain(r.error)}.` : "This book has no pages yet.");
+        Pages.follow(true);
+      } catch (e) {
+        if (R.pp === P) { P.error = e.message; if (!P.data) P.viewer.message(e.message); }
+      } finally {
+        clearTimeout(slow);
+        stopWatch();
+        if (R.pp === P) { P.loading = P.slow = false; Pages.paint(); if (P.again) Pages.load(); }
+      }
+    },
+    /* The spread of the cursor's paragraph: the top-level block the cursor is in, in the piece written in last, has its
+       page from the compile (blocks[file][block]). The page is marked; the pages go to it when it changed, so pages
+       scrolled to by hand stay while the cursor stays on its page. */
+    follow(again = false) {
+      const P = R.pp, d = P?.data, piece = activePiece(), T = piece?.text;
+      if (!d?.count || !T || T.destroyed || piece.closed) return;
+      const list = d.blocks?.[piece.file];
+      if (!list?.length) return;
+      const page = list[Math.min(T.view.state.selection.$from.index(0), list.length - 1)];
+      if (!(page >= 0 && page < d.count) || (page === P.at && !again)) return;
+      const moved = page !== P.at;
+      P.at = page;
+      P.viewer.mark(page);
+      if (moved) P.viewer.go(page);
+    },
+    /* the cursor moved, or another piece is written in */
+    moved() { const P = R.pp; if (P) { clearTimeout(P.timer); P.timer = setTimeout(() => Pages.follow(), 120); } },
+    /* the heads: the piece written in on the left; on the right the pages in view and how many there are */
+    paint() {
+      const P = R.pp;
+      if (!P || P.frame) return;
+      P.frame = requestAnimationFrame(() => {
+        P.frame = 0;
+        if (R.pp !== P) return;
+        paintHead(P.mainHead, R.W.piece);
+        const d = P.data, st = P.head.querySelector(".state");
+        P.head.querySelector(".bw-ph-t").textContent = (d?.count && pagesWhere(d.pages, P.page)) || "Pages";
+        st.textContent = P.slow ? P.words || root.BookPages.SETTING : P.error ? plain(P.error) : d?.error ? "The book can't be set"
+          : d ? `${bookCount(d.count)} page${d.count === 1 ? "" : "s"}` : "";
+        st.title = d?.error ? plain(d.error) : "";
+        st.classList.toggle("dirty", !P.slow && !!(P.error || d?.error));
       });
     },
   };
@@ -995,21 +1202,26 @@
     return out;
   }
   function actions() {
+    const q = R.pal?.input.value.trim() || "";
     const W = R.W, b = W.book, rail = R.rail, goal = +b.goals?.daily || 0, act = (label, hint, run) => ({label, hint, run});
     const tog = (k, show, hide) => act(R.prefs[k] ? hide : show, "Tool", () => setPref(k, !R.prefs[k]));
     return [
+      ...(root.LibrarySearch ? [act(q ? `Search the library for “${q}”` : "Search the library…", "Library", () => root.LibrarySearch.open(q))] : []),
       act("New chapter", "", () => BookEditor.newPiece("chapter")),
       act(R.focus ? "Leave focus mode" : "Focus mode", "Ctrl+Shift+F", () => setFocus(!R.focus)),
       W.split ? act("Close the second pane", "Esc", () => Split.close()) : act("Open a piece beside this one…", "Alt+click", () => Palette.open("beside")),
+      R.pp ? act("Hide the pages", "Ctrl+Shift+P", () => Pages.close()) : act("Show the pages beside the text", "Ctrl+Shift+P", () => Pages.open()),
       act(R.reading ? "Stop reading aloud" : "Read aloud from the cursor", "Tool", () => readAloud()),
       tog("echoes", "Show echoes", "Hide echoes"),
       tog("rhythm", "Show sentence rhythm", "Hide sentence rhythm"),
       tog("style", "Show the style sheet's marks", "Hide the style sheet's marks"),
       ...(goal ? [tog("goal", "Show the daily goal line", "Hide the daily goal line")] : []),
       act(W.root.classList.contains("nobinder") ? "Show the list of pieces" : "Hide the list of pieces", "Ctrl+\\", () => BookEditor.toggleBinder()),
+      act("Keys and tools", "Ctrl+/", () => keysSheet()),
       ...(rail ? rail.panels().map(([id, name]) => act(name, id === "find" ? "Ctrl+F" : "Rail", () => rail.open(id, {focus: true}))) : []),
       ...BOOK_EXPORTS.map(([f, , label]) => act(label, "Export", () => exportBook(f))),
       act("Freeze edition…", "Edition", () => freezeBook()),
+      act("Compose", "View", () => { location.hash = bookComposeHash(b.id); }),
       act("Book settings", "Settings", () => { location.hash = bookTabHash(b.id, "details"); }),
       act("Kind and features", "Settings", () => { location.hash = bookTabHash(b.id, "features"); }),
       act("Look", "Settings", () => { location.hash = bookTabHash(b.id, "look"); }),
@@ -1059,7 +1271,9 @@
       const pieces = W.book.contents.filter(e => e.file && !(P.mode === "beside" && e.file === W.piece?.file)).map(e => ({
         label: pieceTitle(e), untitled: !e.title, file: e.file,
         hint: [e.title ? pieceKindName(e.kind) : "", open.has(e.file) ? "open" : ""].filter(Boolean).join(" · ")}));
-      return [["Pieces", pieces], ["Actions", P.mode === "beside" ? [] : actions()]];
+      // the format commands that apply where the author writes (book-panel.js)
+      const format = P.mode === "beside" ? [] : root.BookFormat?.paletteActions?.(activePiece()?.text) || [];
+      return [["Pieces", pieces], ["Actions", P.mode === "beside" ? [] : actions()], ["Format", format]];
     },
     render() {
       const P = R.pal, q = P.input.value.trim();
@@ -1100,6 +1314,29 @@
     },
   };
 
+  /* ——— the Keys and tools sheet (Ctrl+/, the palette; window.KeysSheet for other keys): every tool with its keys, as
+     book.js's BOOK_KEYS lists them (the Info page shows the same list), then the format commands when they are loaded ——— */
+  const kbd = keys => String(keys).split(" / ").map(k => `<kbd>${esc(k)}</kbd>`).join(`<span class="bt-keys-or">or</span>`);
+  function keysSheet() {
+    const dlg = $("#dlg");
+    if (dlg.open) return;
+    const back = document.activeElement;
+    // the rail's panels as this book has them (Sources only with its feature on)
+    const panels = R.W && R.rail ? R.rail.panels().map(([, name]) => name) : null;
+    const groups = keyGroups(typeof BOOK_KEYS !== "undefined" ? BOOK_KEYS : [], root.BookFormat?.KEYS, panels);
+    openDialog(`<form class="bt-keys"><h2>Keys and tools</h2>
+      <div class="bt-keys-l">${groups.map(([name, rows]) => `<section class="bt-keys-g"><h3 class="label">${esc(name)}</h3><dl>${rows.map(([tool, keys, what, words]) =>
+        `<div class="bt-keys-r"><dt><span class="bt-keys-t">${esc(tool)}</span>${what ? `<span class="bt-keys-w">${esc(what)}</span>` : ""}</dt>
+          <dd>${keys ? kbd(keys) : words ? `<span class="bt-keys-p">${esc(words)}</span>` : ""}</dd></div>`).join("")}</dl></section>`).join("")}</div>
+      <div class="foot"><span class="hint">The Info page lists them too.</span><button type="submit" class="btn solid" autofocus>Done</button></div></form>`, async () => {});
+    dlg.classList.add("bt-keys-dlg");
+    onDialogClose(() => {
+      dlg.classList.remove("bt-keys-dlg");
+      (back && back.isConnected && back !== document.body ? back : activePiece()?.text?.view.dom)?.focus();
+    });
+  }
+  const keysOpen = () => $("#dlg").open && $("#dlg").classList.contains("bt-keys-dlg");
+
   /* ——— what the window says ——— */
   function mount(W) {
     Object.assign(R, {W, focus: false, focusPane: null, active: W, reading: null, find: null, sheetKey: JSON.stringify([W.book.style_sheet, W.book.language]),
@@ -1113,14 +1350,17 @@
     stopReading();
     Palette.close(false);
     Split.close(false);
+    Pages.close(false);
     R.rail?.unmount();
-    Object.assign(R, {W: null, rail: null, focus: false, focusPane: null, active: null, toolsEl: null, goalEl: null, find: null});
+    Object.assign(R, {W: null, rail: null, focus: false, focusPane: null, active: null, toolsEl: null, goalEl: null, find: null, splitEl: null, pagesEl: null});
   }
   function opened(piece) {
     if (piece.win !== R.W) return;
     checkReading();
     if (R.focus && R.focusPane === R.W) { piece.text?.view.setProps({}); const T = piece.text; if (T) requestAnimationFrame(() => typewriter(T, false)); }
     Split.paint();
+    Pages.paint();
+    Pages.moved();               // the pages follow to the piece's spread
     R.rail?.pieceChanged();
     fit();                       // another piece: a poem has no rhythm gutter
   }
@@ -1144,10 +1384,10 @@
     if (!R.W) return;
     if (ev === "unmount") unmount();
     else if (ev === "open") opened(a);
-    else if (ev === "refresh") refreshed(a);
-    else if (ev === "state") Split.paint();
+    else if (ev === "refresh") { refreshed(a); Pages.load(); }          // the book read again: its pages too
+    else if (ev === "state") { Split.paint(); Pages.paint(); }
     else if (ev === "counts") goalLine(a);
-    else if (ev === "saved") R.rail?.saved(a, b);
+    else if (ev === "saved") { R.rail?.saved(a, b); Pages.load(); }     // set again with what was just saved
     else if (ev === "split") Split.open(a);
     else if (ev === "splitGone") Split.close(false);
     else if (ev === "addSource") R.rail?.open("sources", {add: true});
@@ -1166,7 +1406,7 @@
       if (!on) { fit(); return true; }
       if (fit("panel")) return true;
       root.classList.remove("railopen");         // the rail hides the panel and calls railOpen(false), which fits again
-      toast(noRoom("panel", {split: !!R.W.split}), true);
+      toast(noRoom("panel", {split: !!R.W.split, pages: !!R.pp}), true);
       return false;
     },
     /* a panel shows: focus mode, which hides the rail, is left */
@@ -1193,8 +1433,10 @@
     if (!R.W || state.view !== "book" || e.defaultPrevented && e.key !== "Escape") return;
     const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
     if (mod && !e.altKey && !e.shiftKey && k === "k") { e.preventDefault(); if (R.pal) Palette.close(); else if (!$("#dlg").open) Palette.open(); return; }
+    if (mod && !e.altKey && e.key === "/") { e.preventDefault(); if (keysOpen()) $("#dlg").close(); else if (!R.pal) keysSheet(); return; }
     if (R.pal || $("#dlg").open) return;
     if (mod && e.shiftKey && !e.altKey && k === "f") { e.preventDefault(); setFocus(!R.focus); return; }
+    if (mod && e.shiftKey && !e.altKey && k === "p") { e.preventDefault(); Pages.toggle(); return; }
     if (mod && !e.shiftKey && !e.altKey && (k === "f" || k === "h") && R.rail) {
       e.preventDefault();
       const T = activePiece()?.text, v = T?.activeView?.(), sel = v?.state.selection;
@@ -1206,6 +1448,7 @@
       const at = document.activeElement;
       if (R.focus) { e.preventDefault(); setFocus(false); }
       else if (R.W.split && at?.closest?.(".bw-split")) { e.preventDefault(); Split.close(); }
+      else if (R.pp && at?.closest?.(".bw-pp")) { e.preventDefault(); Pages.close(); }
       else if (at?.closest?.(".bw-rail") && !at.closest(".bt-keep-esc")) { e.preventDefault(); activePiece()?.text?.focus(); }
     }
   });
@@ -1223,5 +1466,6 @@
     if (R.focus && e.button === 0 && e.target.closest?.(".bk-note-a, .bk-selbar [data-cmd=note], .bk-selbar [data-cmd=comment]")) setFocus(false);
   }, true);
 
-  root.BookTools = {...helpers, plugins, on, setFocus, readAloud, Palette, Split, activePiece, get state() { return R; }};
+  root.BookTools = {...helpers, plugins, on, setFocus, readAloud, Palette, Split, Pages, keysSheet, activePiece, get state() { return R; }};
+  root.KeysSheet = {open: keysSheet};
 })(typeof window !== "undefined" ? window : globalThis);

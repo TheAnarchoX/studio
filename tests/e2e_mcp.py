@@ -23,7 +23,10 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
 EXPECTED = {"list_poems", "read_poem", "get_rules", "list_concepts", "write_brief", "set_slides", "render", "qa",
-            "get_design", "save_design", "render_design"}
+            "get_design", "save_design", "render_design", "list_books", "read_book", "read_piece", "search_book",
+            "list_sources", "add_source", "suggest", "list_suggestions", "withdraw_suggestions",
+            "list_research", "read_research", "add_research", "get_book_design", "set_book_design", "render_pages",
+            "export_pdf", "preflight"}
 
 
 def text(res):
@@ -37,6 +40,13 @@ def throwaway_library():
     s.create_series("Night Letters", "Letters written at night.")
     p = s.create("Hold the Line", "Night Letters")
     s.save_text(p["id"], "Hold the Line", "Hold the line\nwhen they push.\nHold it longer.")
+    from studio.books import Books
+    books = Books(root / "Books")
+    books.create("The Quiet Harbour", author="A. Writer", kind="memoir")
+    books.update("The Quiet Harbour", {"features": {"notes": "endnotes", "sources": True}})
+    chapter = next(e["file"] for e in books.read("The Quiet Harbour")["contents"] if e.get("kind") == "chapter")
+    books.save_piece("The Quiet Harbour", chapter, md="# Low Tide\n\nThe boats lean in the mud.\n\n"
+                     "The gulls wait for the water.\n\nNobody walks the pier before dawn.\n")
     return root, p["id"]
 
 
@@ -102,6 +112,41 @@ async def main(poem, out_dir, env):
         assert len(pics) == 3, "render_design should return a picture per format"
         Path(out_dir, "design-preview.jpg").write_bytes(base64.b64decode(pics[0].data))
         assert '"Hold the line"' in text(await call("get_design", poem=poem, design=slug))
+        # books: read, add a source, propose, list, withdraw
+        def first(res):
+            return text(res).splitlines()[0]
+        shelf = json.loads(text(await call("list_books")))
+        assert shelf and shelf[0]["id"] == "The Quiet Harbour", shelf
+        print("\n- list_books:", shelf[0]["title"], "|", shelf[0]["pieces"], "pieces")
+        book = json.loads(text(await call("read_book", book="The Quiet Harbour")))
+        print("- read_book:", book["title"], "|", len(book["contents"]), "contents")
+        page = text(await call("read_piece", book="The Quiet Harbour", piece="Low Tide"))
+        assert "The boats lean in the mud." in page.split("\n---\n", 1)[1]
+        print("- read_piece:", json.loads(page.split("\n---\n")[0])["file"])
+        print("- add_source:", first(await call("add_source", book="The Quiet Harbour", source={"title": "Salt Marsh",
+              "author": [{"family": "Reed"}], "issued": {"date-parts": [[2021]]}})))
+        res = await call("suggest", book="The Quiet Harbour", suggestions=[
+            {"piece": "Low Tide", "kind": "edit", "quote": "boats lean", "text": "boats sag", "why": "Stronger verb."},
+            {"piece": "Low Tide", "kind": "note", "quote": "the pier", "text": "The old pier."}], label="E2E")
+        print("- suggest:", first(res))
+        assert first(res).startswith("Added 2 suggestions"), text(res)
+        got = json.loads(text(await call("list_suggestions", book="The Quiet Harbour")))
+        assert len(got) == 2 and all(g["found"] for g in got), got
+        print("- list_suggestions:", len(got), "open, all found")
+        out = await call("withdraw_suggestions", book="The Quiet Harbour", ids=[got[0]["id"]])
+        assert first(out) == "Withdrew 1.", text(out)
+        print("- withdraw_suggestions:", first(out))
+        added = first(await call("add_research", book="The Quiet Harbour",
+                                 item={"type": "note", "title": "Tide table", "text": "High water at six."}))
+        assert added.startswith("Added note ") and added.endswith("to The Quiet Harbour"), added
+        board = json.loads(text(await call("list_research", book="The Quiet Harbour")))
+        assert [i["title"] for i in board["items"]] == ["Tide table"], board
+        full = json.loads(text(await call("read_research", id=board["items"][0]["id"], book="The Quiet Harbour")))
+        assert full["text"].strip() == "High water at six.", full
+        print("- add_research / list_research / read_research:", added, "|", len(board["items"]), "item")
+        design = json.loads(text(await call("get_book_design", book="The Quiet Harbour")))
+        assert design["design"]["trim"] and design["templates"], design.keys()
+        print("- get_book_design:", design["design"]["template"], design["design"]["trim"])
         print("\nall good; previews in", Path(out_dir).resolve())
 
 

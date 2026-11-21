@@ -1,18 +1,37 @@
 /* The writing window's tools (book-tools.js, book-rail.js): the rail, the status bar's writing tools and the goal line,
-   marks in the text (echoes, the style sheet, find), focus mode, the second pane and the command palette.
+   marks in the text (echoes, the style sheet, find), focus mode, the second pane (a piece, or the pages), the command
+   palette and the Keys and tools sheet.
    Loaded after book.css; the window's own layout (.bw, the binder, the page, the margin) is there. */
 
-/* ——— the rail: a column of icons at the window's edge, one panel open beside it ——— */
+/* ——— the rail: a column of icons at the window's edge, one panel open beside it. Its first row (the first icon, the
+   open panel's Close, the first panel's name) sits on the line of the tabs over the list of pieces: 2 px down and
+   44 px tall, the words centred, as a tab's text is ——— */
 .bw-rail{display:flex;min-width:0;min-height:0;background:var(--room);border-left:1px solid var(--line-soft)}
-.br-icons{display:flex;flex-direction:column;flex:none;width:48px;padding:16px 0}
+.br-icons{display:flex;flex-direction:column;flex:none;width:48px;padding:2px 0 16px}
 .br-i{display:grid;place-items:center;height:44px;padding:0;background:none;border:0;color:var(--fog);cursor:pointer}
 .br-i:hover{color:var(--paper)}
 .br-i[aria-pressed="true"]{color:var(--paper);box-shadow:inset -2px 0 0 var(--red)}      /* the red rule at the window's edge, as the binder's */
 .br-i:focus-visible{outline-offset:-4px}
-.br-i svg{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:square}
+.br-i svg{flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:square}
+/* The panels' names beside their icons, while a panel is open and there is room (.labels: book-tools.js gives them up
+   first, before the list of pieces; the icons then keep their tooltips). The column widens by the names; the icons stay
+   put. Each name sits on the baseline of an empty strut set as a tab's text is (11 px, centred in the row), so the
+   names share the tabs' line, the first on it. */
+.br-l{display:none}
+.bw.railopen.labels .br-icons{width:auto}
+.bw.railopen.labels .br-i{display:flex;align-items:baseline;justify-content:flex-start;gap:12px;padding:0 20px 0 15px;font:500 13px/1 var(--sans);white-space:nowrap}
+.bw.railopen.labels .br-i::before{content:"\200b";display:flex;align-items:center;width:0;height:100%;margin-right:-12px;font:600 11px/1 var(--sans)}
+.bw.railopen.labels .br-i svg{align-self:center}
+.bw.railopen.labels .br-l{display:inline}
 .br-panel{display:flex;flex-direction:column;width:340px;min-height:0;border-right:1px solid var(--line-soft)}
-/* the head is the binder's: kicker, a title in the serif, a quiet line of words */
+/* the head is the binder's: kicker, a title in the serif, a quiet line of words; Close in the kicker's row, as in
+   Compose's design panel. In the rail Close has a strip of its own, built as the tabs' strip over the list of pieces
+   is (48 px with its rule; 2 px down and 44 px tall, the word centred, as a tab's text is), so it is on the tabs' line;
+   under it the head is the binder's row for row (.bb-head: 22 px, the kicker, the title, the quiet line, 18 px), so
+   the kicker, the title, the quiet line and the rule under the head sit level with the binder's. */
 .br-head{flex:none;padding:22px 20px 18px;border-bottom:1px solid var(--line-soft)}
+.bw-rail .br-head{padding-top:0}
+.br-bar{display:flex;align-items:center;justify-content:flex-end;height:48px;margin:0 -20px 22px;padding:2px 20px 1px;border-bottom:1px solid var(--line-soft)}
 .br-k{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .br-k .kicker{margin:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .br-x{flex:none}
@@ -108,11 +127,55 @@
 .br-r.on mark{box-shadow:inset 0 -2px 0 var(--red)}
 .br-r-in{display:block;margin-top:3px;font:500 11px/1.2 var(--sans);color:var(--fog)}
 
+/* suggestions (book-suggest.js): Whole book · This piece, groups newest first, a row per suggestion; what it does in the
+   book's text font, an edit as the History panel shows one (struck through: the words now, underlined: the new) */
+.bs-scope{display:flex;gap:20px;margin:18px 0 0}
+.bs-scope button{background:none;border:0;padding:0 0 6px;font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bs-scope button:hover{color:var(--paper)}
+.bs-scope button[aria-pressed="true"]{color:var(--paper);box-shadow:inset 0 -2px 0 var(--red)}
+.bs-g{margin-top:22px}
+.bs-g-h{margin:0 0 8px}
+.bs-g-t{margin:0;font:600 15px/1.3 var(--serif);color:var(--paper);overflow-wrap:break-word}
+.bs-g-a{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+.bs-g .br-list{border-top:1px solid var(--line-soft)}
+.bs-go{display:flex;flex-direction:column;gap:5px;padding-bottom:8px}
+.bs-k{font:500 11px/1.3 var(--sans);letter-spacing:.02em;color:var(--fog)}
+.bs-x{font:400 15px/1.45 var(--bs-font,var(--serif));color:var(--paper);overflow-wrap:break-word}
+.bs-x del{color:var(--fog);text-decoration:line-through}
+.bs-x ins{text-decoration:none;box-shadow:inset 0 -.14em 0 var(--red)}
+.bs-x del+ins{margin-left:.3em}
+.bs-w{font:400 13px/1.45 var(--sans);color:var(--fog)}
+.bs-say{font:400 13px/1.45 var(--sans);color:var(--paper-dim)}
+.bs-row.gone .bs-x{color:var(--fog)}
+.bs-go:hover .bs-x{color:var(--paper-hot)}
+.bs-row.gone .bs-go:hover .bs-x{color:var(--paper-dim)}
+.bs-acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 0 12px}
+/* Decided, folded at the end */
+.bs-dec{margin-top:28px;border-top:1px solid var(--line-soft)}
+.bs-dec summary{padding:16px 0 4px;font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
+.bs-dec summary:hover{color:var(--paper)}
+.bs-dl{margin-top:10px;border-top:1px solid var(--line-soft)}
+.bs-d-x{display:flex;flex-direction:column;gap:5px;padding:10px 0 6px}
+.bs-d .bs-x{font-size:14px;color:var(--paper-dim)}
+.bs-d .bs-acts{justify-content:space-between;min-height:30px;padding-bottom:10px}
+.bs-d-s{font:500 12px/1.3 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
+
 /* ——— marks in the text ——— */
 .bk-text .bt-echo{text-decoration:underline solid color-mix(in srgb,var(--fog) 75%,transparent);text-decoration-thickness:2px;text-underline-offset:.24em;text-decoration-skip-ink:none}
 .bk-text .bt-style{text-decoration:underline dotted color-mix(in srgb,var(--red) 75%,transparent);text-decoration-thickness:1.5px;text-underline-offset:.24em;text-decoration-skip-ink:none}
 .bk-text .bt-find{background:color-mix(in srgb,var(--paper) 16%,transparent)}
 .bk-text .bt-find.on{background:color-mix(in srgb,var(--paper) 26%,transparent);box-shadow:inset 0 -2px 0 var(--red)}
+/* Claude's suggestions while their panel is open (book-suggest.js): the words dotted in the accent; the current one shows
+   its change as the panel's row does (struck through: the words now; underlined: the new), a note as a faint note mark,
+   a citation as its faint label. None of it changes a line's height. */
+.bk-text .bs-u{text-decoration:underline dotted color-mix(in srgb,var(--red) 55%,transparent);text-decoration-thickness:1.5px;text-underline-offset:.3em;text-decoration-skip-ink:none}
+.bk-text .bs-u.on{text-decoration-color:var(--red)}
+.bk-text .bs-u.bs-del{color:var(--fog);text-decoration:line-through}
+.bk-text .bs-ins{margin-left:.3em;text-decoration:none;box-shadow:inset 0 -.14em 0 var(--red)}
+.bk-text .bs-gn{padding:0 .06em;font-size:.66em;line-height:0;vertical-align:super;color:color-mix(in srgb,var(--red) 55%,transparent);font-variant-numeric:lining-nums}
+.bk-text .bs-gc{margin:0 .12em;padding:.2em .5em;font:500 .7em/1 var(--sans);letter-spacing:.02em;color:var(--fog);white-space:nowrap;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--red) 45%,transparent)}
+/* a word none of its spelling languages knows (book-spell.js), in the text and in the notes */
+.bk-text .bk-spell,.bm-ed .bk-spell{text-decoration:underline wavy var(--danger);text-decoration-thickness:1px;text-underline-offset:.22em;text-decoration-skip-ink:none}
 /* the citation form (book-text.js) has four quiet buttons with Add source: on one line */
 .bk-pop-f .bm-btn{white-space:nowrap}
 /* the style sheet's word under the cursor: what to use, and the button that uses it */
@@ -132,6 +195,10 @@
 .bw-goal{position:absolute;left:0;top:-1px;width:0;height:2px;background:color-mix(in srgb,var(--red) 65%,transparent);pointer-events:none;transition:width .5s var(--ease)}
 .bw-goal.done{background:var(--red)}
 .bw-goal[hidden]{display:none}
+/* while suggestions wait: a quiet "4 suggestions" after the counts, which opens the panel */
+.bw-sugg{flex:none;background:none;border:0;padding:0;font:inherit;color:var(--fog);white-space:nowrap;cursor:pointer}
+.bw-sugg:hover{color:var(--paper)}
+.bw-sugg[hidden]{display:none}
 
 /* the bar over the text: a long message wraps beside its buttons, which stay at the row's end like every other row's */
 .bw-bar-t{flex:1 1 280px;min-width:0}
@@ -141,11 +208,21 @@
 .bw.split.nobinder{grid-template-columns:0 minmax(0,1fr) minmax(0,1fr) auto}
 .bw.split .bw-rail{grid-column:4}
 .bw-main.bw-split{grid-column:3;grid-row:1;border-left:1px solid var(--line-soft)}
-.bw-ph{display:flex;align-items:baseline;gap:14px;flex:none;height:44px;min-width:0;padding:16px 24px 0;border-bottom:1px solid var(--line-soft)}     /* one baseline for the title, the state and Close */
+/* One baseline for the title, the state and Close, and it is the tabs' over the list of pieces: the head is as tall as
+   their strip, and an empty strut built as a tab is (.bc-tabs a: 2 px above, a 2 px rule below, the text centred)
+   gives the baseline, so the words sit on the tabs' line at any screen density. */
+.bw-ph{display:flex;align-items:baseline;gap:14px;flex:none;height:48px;min-width:0;padding:0 24px;border-bottom:1px solid var(--line-soft)}
+.bw-ph::before{content:"\200b";display:flex;align-items:center;box-sizing:border-box;width:0;height:calc(100% + 1px);margin-right:-14px;
+  padding-top:2px;border-bottom:2px solid transparent;font:600 11px/1 var(--sans)}
 .bw-ph-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:600 13px/1 var(--sans);color:var(--paper)}
 .bw-ph .state{flex:none;font-size:12px;line-height:1}
 .bw-ph-x{flex:none;margin-left:auto}
 .bw.split .bw-page{grid-template-columns:minmax(0,65ch) clamp(150px,13vw,200px);column-gap:clamp(20px,2.4vw,36px);padding:40px clamp(16px,2.4vw,36px) 42vh}
+/* the second pane keeps its scrollbar's room from the start: it is measured for room (fit) before its piece is in,
+   and the text must not lose those pixels once it is */
+.bw-split .bw-scroll{scrollbar-gutter:stable}
+/* the pages beside the text (Pages): in the second pane's slot, Compose's viewer (book-pages.js) on its desk */
+.bw-pp-desk{flex:1;display:flex;min-width:0;min-height:0}
 
 /* ——— room (book-tools.js, fit): when a text column would be under 360 px the list of pieces goes first, then the page's
    side gutters and the notes margin (tight), then the rhythm's gutter (compact); what still doesn't fit is refused ——— */
@@ -165,8 +242,9 @@ body:has(.bw.focus) .top{display:none}
 .bw.focus.split:not(.focus-split) .bw-split,.bw.focus.focus-split .bw-main:not(.bw-split){display:none}
 .bw.focus.focus-split .bw-split{grid-column:2;border-left:0}
 .bw.focus .bw-page,.bw.focus.split .bw-page{grid-template-columns:minmax(0,65ch);padding-top:45vh;padding-bottom:55vh}
-.bw.focus .bk-text>:not(blockquote):not(.bk-epigraph):not(.bk-poem):not(.bt-cur):not(.ProseMirror-gapcursor),
-.bw.focus .bk-text>:is(blockquote,.bk-epigraph,.bk-poem)>:not(.bt-cur){opacity:.35;transition:opacity .25s var(--ease)}
+.bw.focus .bk-text>:not(blockquote):not(.bk-epigraph):not(.bk-poem):not(.bk-align):not(.bk-tablew):not(.bt-cur):not(.ProseMirror-gapcursor),
+.bw.focus .bk-text>:is(blockquote,.bk-epigraph,.bk-poem,.bk-align)>:not(.bt-cur),
+.bw.focus .bk-text>.bk-tablew:not(.bt-cur) td:not(.bt-cur){opacity:.35;transition:opacity .25s var(--ease)}
 @media (prefers-reduced-motion:reduce){.bw.focus .bk-text *{transition:none!important}.bw-goal{transition:none}}
 
 /* ——— the command palette ——— */
@@ -186,3 +264,18 @@ body:has(.bw.focus) .top{display:none}
 .bt-pal-i b{font-weight:700;color:var(--paper)}
 .bt-pal-i .h{flex:none;font:500 12px/1 var(--sans);color:var(--fog)}
 .bt-pal-none{margin:0;padding:18px 14px;font-size:14px;color:var(--fog)}
+
+/* ——— the Keys and tools sheet: each tool with what it does, its keys at the row's end ——— */
+dialog.modal.bt-keys-dlg{width:min(680px,calc(100vw - 32px))}
+.bt-keys-l{max-height:min(60vh,620px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:12px}
+.bt-keys-g+.bt-keys-g{margin-top:28px}
+.bt-keys-g .label{margin:0 0 8px}
+.bt-keys-g dl{margin:0;border-top:1px solid var(--line-soft)}
+.bt-keys-r{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:24px;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--line-soft)}
+.bt-keys-r dt{display:flex;flex-direction:column;gap:4px;min-width:0}
+.bt-keys-t{font:600 14px/1.3 var(--sans);color:var(--paper)}
+.bt-keys-w{font:400 13px/1.4 var(--sans);color:var(--fog)}
+.bt-keys-r dd{margin:0;white-space:nowrap}
+.bt-keys-r kbd{display:inline-block;font:600 11px/1 var(--sans);letter-spacing:.06em;color:var(--paper);border:1px solid var(--line);padding:4px 6px}
+.bt-keys-or{margin:0 8px;font:400 12px/1 var(--sans);color:var(--fog)}
+.bt-keys-p{font:500 12px/1.3 var(--sans);color:var(--fog)}        /* words where a tool has no keys: the rail's icons */

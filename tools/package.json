@@ -5,6 +5,8 @@
   "description": "Builds studio/static/vendor/prosemirror.js. Dev-time only; Studio never needs Node at runtime.",
   "type": "module",
   "dependencies": {
+    "hunspell-asm": "4.0.2",
+    "katex": "0.19.1",
     "prosemirror-commands": "1.7.2",
     "prosemirror-dropcursor": "1.8.4",
     "prosemirror-gapcursor": "1.4.1",

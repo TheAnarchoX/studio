@@ -42,7 +42,7 @@ STUDIO_ART=/tmp/studio-test STUDIO_CONFIG=/tmp/studio-test/config.json STUDIO_PO
 
 ## Rebuilding the vendored editor
 
-The book editor runs on ProseMirror, bundled into one file, `studio/static/vendor/prosemirror.js`. Rebuild it only when you add an export to `tools/vendor-entry.js` or change a version in `tools/package.json`:
+The book editor runs on ProseMirror, bundled into one file, `studio/static/vendor/prosemirror.js`. It checks spelling with Hunspell compiled to WebAssembly ([hunspell-asm](https://github.com/kwonoj/hunspell-asm)), bundled into `studio/static/vendor/hunspell.js` with the WebAssembly inside it, and renders math with KaTeX, copied from the pinned npm package into `studio/static/vendor/katex/` (minified JS, CSS rewritten to woff2 fonts only, the fonts). Rebuild them only when you add an export to `tools/vendor-entry.js` or `tools/hunspell-entry.js` or change a version in `tools/package.json`:
 
 ```bash
 cd tools
@@ -50,7 +50,11 @@ npm ci
 node build_vendor.mjs
 ```
 
-The output is committed, so Studio never needs Node at runtime. The build is deterministic: rebuilding without changes leaves the file untouched.
+The output is committed, so Studio never needs Node or the network at runtime. The build is deterministic: rebuilding without changes leaves the files untouched (`tests/test_spelling.py` checks `hunspell.js`). The licences are in `studio/static/vendor/LICENSE-*.txt`: Hunspell is used under the MPL 1.1, the rest is MIT.
+
+## The spelling dictionaries
+
+`studio/static/dictionaries/<lang>/` holds the Hunspell dictionaries the book editor checks spelling with, each with its licence: `nl` (Dutch, OpenTaal: BSD-3-Clause or CC BY 3.0), `en` (American English) and `en-GB` (British English, "ise" spelling), both from SCOWL under its permissive licence. They are copied unchanged from [wooorm/dictionaries](https://github.com/wooorm/dictionaries) at commit `8cfea406b505e4d7df52d5a19bce525df98c54ab`: `dictionaries/<lang>/index.aff`, `index.dic` and `license` (saved as `LICENSE`). To update one, take the three files from a newer commit, note that commit here, and run `python -m unittest tests.test_spelling`. Only add a language whose licence allows redistribution in an MIT repository (several dictionaries are GPL).
 
 ## Reporting bugs
 

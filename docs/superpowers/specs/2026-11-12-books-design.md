@@ -15,7 +15,7 @@ comfortable but has everything under the hood, a composer for book design, a boa
 writing, and tools that let Claude help without touching the prose. Books are a separate area from poems;
 articles (blogs, essays, media pieces) follow later as a third area built on the same parts.
 
-The first book is a Dutch memoir that mixes prose, poems and opinion, written over many years and imported from
+The case to get right is a book that mixes prose, poems and opinion, written over many years and imported from
 Google Docs. It sets the bar: mixed forms in one book, editions over time, notes and references, Dutch typesetting.
 
 ## Decisions
@@ -265,7 +265,7 @@ group, tags, search. Items are files in `research/` with positions in `research/
 **Part 4, Claude's tools.** `list_books`, `read_book`, `read_piece`, `search_book`, `list_research`,
 `add_research`, `add_source`, `suggest` (index terms, notes, edits; stored in `suggestions.json` and shown in the
 editor to accept or reject), `get_book_design`, `set_book_design`, `render_pages`, `export_pdf`, `preflight`.
-No tool writes manuscript text.
+No tool writes manuscript text. The design for part 4 is in `2026-11-13-books-part-4-design.md`.
 
 ## Testing
 

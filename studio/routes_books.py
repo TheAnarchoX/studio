@@ -7,7 +7,7 @@ import base64
 import subprocess
 import sys
 
-from . import book_export, book_import, config, manuscript, routes
+from . import book_export, book_import, config, manuscript, routes, suggestions
 from .books import AUTO, FORMS, KINDS, PIECE_KINDS, Books, BooksError
 
 
@@ -219,3 +219,22 @@ def import_propose(h, body):
 @routes.post("/api/book/import/commit")
 def import_commit(h, body):
     h._send(200, book_import.commit(_books(), body))
+
+
+@routes.get("/api/book/suggestions")
+def suggestions_list(h, q):
+    """Claude's suggestions for the book (of one piece, with f): open (the default), decided or all."""
+    file = q.get("f")
+    h._send(200, suggestions.listing(_books(), q.get("b"), file if file else None, q.get("status") or "open"))
+
+
+@routes.post("/api/book/suggestions/decide")
+def suggestions_decide(h, body):
+    """The writer accepts, rejects or brings back suggestions. Withdrawing is Claude's, through MCP."""
+    decision = body.get("decision")
+    if decision == "withdraw":
+        raise BooksError("Only Claude withdraws its suggestions.")
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise BooksError("Send a list of suggestion ids.")
+    h._send(200, suggestions.decide(_books(), body.get("b"), ids, decision if isinstance(decision, str) else ""))

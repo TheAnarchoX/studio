@@ -11,6 +11,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from PIL import Image
 
 from studio import book_export
@@ -88,13 +89,121 @@ class ExportTest(unittest.TestCase):
     def open(self, data):
         return Document(io.BytesIO(data))
 
+    def test_docx_lists_alignment_and_marks(self):
+        bid, files = self.make()
+        md = ("# Kop\n\n1. Een\n2. Twee\n   a. Sub\n\nTussen.\n\n3. Drie\n\n- Punt\n\n::: center\nMidden\n:::\n\n"
+              "::: right\nRechts\n:::\n\nEen [o]{.underline} ~~s~~ [g]{.large} woord.\n")
+        (self.lib / "Books" / bid / "manuscript" / files[1]).write_text(md, encoding="utf-8")
+        doc = self.open(book_export.to_docx(self.b, bid))
+        by = {p.text: p for p in doc.paragraphs}
+
+        def num(p):
+            ilvl = p._p.xpath("./w:pPr/w:numPr/w:ilvl/@w:val")
+            nid = p._p.xpath("./w:pPr/w:numPr/w:numId/@w:val")
+            return (int(ilvl[0]), int(nid[0])) if ilvl else None
+
+        names = ["Een", "Twee", "Sub", "Drie", "Punt"]
+        self.assertEqual([num(by[n])[0] for n in names], [0, 0, 1, 0, 0])
+        self.assertIsNone(num(by["Tussen."]))
+        self.assertEqual(num(by["Een"])[1], num(by["Twee"])[1])
+        self.assertEqual(len({num(by[n])[1] for n in names}), 4)       # Een/Twee share; the others have their own
+
+        numbering = doc.part.numbering_part.element
+
+        def level(p):
+            lvl, nid = num(p)
+            abstract = numbering.xpath(f"w:num[@w:numId='{nid}']/w:abstractNumId/@w:val")[0]
+            return numbering.xpath(f"w:abstractNum[@w:abstractNumId='{abstract}']/w:lvl[@w:ilvl='{lvl}']")[0]
+
+        def val(el, tag):
+            return el.find(qn(f"w:{tag}")).get(qn("w:val"))
+
+        self.assertEqual(val(level(by["Drie"]), "numFmt"), "decimal")
+        self.assertEqual(val(level(by["Drie"]), "start"), "3")
+        self.assertEqual(val(level(by["Sub"]), "numFmt"), "lowerLetter")
+        self.assertEqual(val(level(by["Punt"]), "numFmt"), "bullet")
+        self.assertEqual(val(level(by["Een"]), "start"), "1")
+        self.assertEqual(by["Een"].style.name, "List Paragraph")
+        self.assertEqual(by["Midden"].alignment, WD_ALIGN_PARAGRAPH.CENTER)
+        self.assertEqual(by["Rechts"].alignment, WD_ALIGN_PARAGRAPH.RIGHT)
+        body = next(p for p in doc.paragraphs if p.text.startswith("Een o"))
+        runs = {r.text: r for r in body.runs}
+        self.assertTrue(runs["o"].underline)
+        self.assertTrue(runs["s"].font.strike)
+        base = doc.styles["Normal"].font.size
+        base = base.pt if base else 11
+        self.assertAlmostEqual(runs["g"].font.size.pt, base * 1.2, delta=0.25)       # Word sizes are half-points
+
+    def test_docx_table(self):
+        bid, files = self.make(language="nl")
+        md = ("Voor.\n\n| Jaar | Plaats |\n| --- | :-: |\n| 1984 | Utrecht |\n| 1990 | *Gent*^[Een noot.] |\n\n"
+              "Na.\n\n|  |  |\n| --- | --: |\n| a | b |\n")
+        (self.lib / "Books" / bid / "manuscript" / files[1]).write_text(md, encoding="utf-8")
+        doc = self.open(book_export.to_docx(self.b, bid))
+        first, second = doc.tables
+        self.assertEqual((len(first.rows), len(first.columns)), (3, 2))
+        self.assertEqual(first.style.name, "Table Grid")
+        self.assertEqual([c.text for c in first.rows[0].cells], ["Jaar", "Plaats"])
+        self.assertTrue(all(r.bold for c in first.rows[0].cells for r in c.paragraphs[0].runs))
+        self.assertEqual(len(first.rows[0]._tr.xpath("./w:trPr/w:tblHeader")), 1)
+        self.assertEqual(first.rows[1]._tr.xpath("./w:trPr/w:tblHeader"), [])
+        self.assertFalse(any(r.bold for c in first.rows[1].cells for r in c.paragraphs[0].runs))
+        self.assertEqual(first.cell(1, 1).paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.CENTER)
+        self.assertIsNone(first.cell(1, 0).paragraphs[0].alignment)
+        self.assertEqual(first.cell(2, 1).text, "Gent1")
+        self.assertTrue(first.cell(2, 1).paragraphs[0].runs[0].italic)
+        texts = [p.text for p in doc.paragraphs]
+        self.assertIn("Noten", texts)
+        self.assertIn("1. Een noot.", texts)
+        # no header: no empty first row, nothing marked as a header; the right-aligned column
+        self.assertEqual((len(second.rows), len(second.columns)), (1, 2))
+        self.assertEqual(second.rows[0]._tr.xpath("./w:trPr/w:tblHeader"), [])
+        self.assertFalse(any(r.bold for r in second.cell(0, 1).paragraphs[0].runs))
+        self.assertEqual(second.cell(0, 1).paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.RIGHT)
+
+    def test_tables_side_by_side_stay_two_tables(self):
+        """Word joins two tables with nothing between them into one: an empty paragraph keeps them apart."""
+        bid, files = self.make()
+        md = "| a |\n| --- |\n| b |\n\n| c | d |\n| --- | --- |\n| e | f |\n"
+        (self.lib / "Books" / bid / "manuscript" / files[1]).write_text(md, encoding="utf-8")
+        doc = self.open(book_export.to_docx(self.b, bid))
+        self.assertEqual(len(doc.tables), 2)
+        tags = [el.tag for el in doc.element.body]
+        k = tags.index(qn("w:tbl"))
+        self.assertEqual(tags[k + 1:k + 3], [qn("w:p"), qn("w:tbl")])
+        self.assertEqual(doc.element.body[k + 1].xpath("string(.)"), "")
+
+    def test_docx_math_is_its_source_in_cambria_math(self):
+        bid, files = self.make()
+        md = ("Einstein schreef $E = mc^2$ en meer.\n\n$$\n\\int_0^1 x\\,dx\n= \\frac{1}{2}\n$$\n\n"
+              "| a |\n| --- |\n| $y$ |\n")
+        (self.lib / "Books" / bid / "manuscript" / files[1]).write_text(md, encoding="utf-8")
+        doc = self.open(book_export.to_docx(self.b, bid))
+
+        def font(run):
+            fonts = run._r.find(qn("w:rPr")).find(qn("w:rFonts"))
+            return [fonts.get(qn(f"w:{k}")) for k in ("ascii", "hAnsi", "cs")]
+
+        body = next(p for p in doc.paragraphs if p.text.startswith("Einstein"))
+        self.assertEqual(body.text, "Einstein schreef $E = mc^2$ en meer.")
+        run = next(r for r in body.runs if r.text == "$E = mc^2$")
+        self.assertEqual(font(run), ["Cambria Math"] * 3)
+        self.assertIsNone(body.runs[0]._r.find(qn("w:rPr")))           # the text around it keeps its own font
+        shown = next(p for p in doc.paragraphs if p.text.startswith("$$"))
+        self.assertEqual(shown.text, "$$\\int_0^1 x\\,dx\n= \\frac{1}{2}$$")
+        self.assertEqual(shown.alignment, WD_ALIGN_PARAGRAPH.CENTER)
+        self.assertTrue(shown.runs and all(font(r) == ["Cambria Math"] * 3 for r in shown.runs))
+        cell = doc.tables[0].cell(1, 0).paragraphs[0]
+        self.assertEqual((cell.text, font(cell.runs[0])), ("$y$", ["Cambria Math"] * 3))
+
     def test_docx_has_the_book(self):
         bid, _ = self.make()
         doc = self.open(book_export.to_docx(self.b, bid))
         paras = doc.paragraphs
         heads = [(p.style.name, p.text) for p in paras if p.style.name.startswith(("Heading", "Title"))]
-        self.assertEqual(heads, [("Title", "The Long Road"), ("Heading 1", "The Harbour"), ("Heading 2", "The Water"),
-                                 ("Heading 3", "Low tide"), ("Heading 2", "Notes")])
+        self.assertEqual(heads, [("Title", "The Long Road"), ("Title", "The Long Road"),
+                                 ("Heading 1", "The Harbour"), ("Heading 2", "The Water"),
+                                 ("Heading 3", "Low tide"), ("Heading 1", "Notes"), ("Heading 3", "The Harbour")])
         ded = next(p for p in paras if p.text == "For the ones who waited.")
         self.assertEqual(ded.alignment, WD_ALIGN_PARAGRAPH.CENTER)
         self.assertTrue(ded.runs[0].italic)
@@ -231,6 +340,98 @@ class ExportTest(unittest.TestCase):
         self.assertLess(md.index("# Dedication"), md.index("# The Harbour"))
         self.assertIn("Gulls circled *twice*", md)
         self.assertNotIn("\r", md)
+
+    def test_docx_generated_pages(self):
+        bid, files = self.make("nl")
+        d = self.lib / "Books" / bid / "manuscript"
+        (d / files[1]).write_text('# De haven\n\nEen [jeugd]{.idx term="trauma > jeugd"} lang geleden.^[Een noot.]\n',
+                                  encoding="utf-8")
+        self.b.update(bid, {"features": {"notes": "endnotes", "index": True, "sources": True}})
+        contents = [{k: v for k, v in e.items() if k in ("auto", "file", "kind", "form")}
+                    for e in self.b.read(bid)["contents"]]
+        have = [e["auto"] for e in contents if e.get("auto")]
+        contents += [{"auto": a} for a in ("bibliography", "index") if a not in have]
+        self.b.update(bid, {"contents": contents})
+        data = book_export.to_docx(self.b, bid)
+        texts = [p.text for p in self.open(data).paragraphs]
+        self.assertEqual(texts.count("The Long Road"), 2)             # half-title and title page
+        self.assertTrue(any(t.startswith("Alle rechten voorbehouden") for t in texts))
+        self.assertEqual(texts.count("Noten"), 1)
+        self.assertEqual(sum(t == "1. Een noot." for t in texts), 1)  # once, at the back
+        self.assertGreater(texts.index("Noten"), texts.index("De haven"))
+        self.assertIn("Inhoud", texts)
+        z = zipfile.ZipFile(io.BytesIO(data))
+        xml = z.read("word/document.xml").decode("utf-8")
+        self.assertIn("TOC \\o", xml)
+        self.assertIn('XE "trauma:jeugd"', xml)
+        self.assertIn("INDEX", xml)
+        for label in ("Noten", "Register"):                      # the back pages start on a page of their own
+            self.assertTrue(next(p for p in self.open(data).paragraphs if p.text == label)
+                            .paragraph_format.page_break_before)
+        self.assertIn("w:updateFields", z.read("word/settings.xml").decode("utf-8"))
+
+    def test_docx_footnotes_keep_the_list_after_each_piece(self):
+        bid, files = self.make()
+        self.b.update(bid, {"features": {"notes": "footnotes"}})
+        texts = [p.text for p in self.open(book_export.to_docx(self.b, bid)).paragraphs]
+        self.assertIn("1. First note, with style.", texts)
+        self.assertIn("Notes", texts)
+
+    def test_docx_bibliography(self):
+        bid, files = self.make()
+        contents = [{k: v for k, v in e.items() if k in ("auto", "file", "kind", "form")}
+                    for e in self.b.read(bid)["contents"]] + [{"auto": "bibliography"}]
+        self.b.update(bid, {"contents": contents, "features": {"sources": True}})
+        texts = [p.text for p in self.open(book_export.to_docx(self.b, bid)).paragraphs]
+        self.assertIn("Bibliography", texts)
+        self.assertTrue(any("Marsh" in t and "Tides" in t for t in texts))
+
+    def test_docx_leaves_out_what_the_pdf_leaves_out(self):
+        """The generated pages the PDF leaves out (typeset_book.left_out) aren't in the .docx either: a feature that
+        is off, notes that are footnotes, and a page with nothing to list."""
+        bid, files = self.make()
+        contents = [{k: v for k, v in e.items() if k in ("auto", "file", "kind", "form")}
+                    for e in self.b.read(bid)["contents"]]
+        have = [e["auto"] for e in contents if e.get("auto")]
+        self.b.update(bid, {"contents": contents + [{"auto": a} for a in ("notes", "bibliography", "index")
+                                                    if a not in have]})
+
+        def back(features):
+            self.b.update(bid, {"features": features})
+            data = book_export.to_docx(self.b, bid)
+            heads = [p.text for p in self.open(data).paragraphs if p.style.name == "Heading 1"]
+            return heads, zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8")
+
+        heads, xml = back({"notes": "endnotes", "sources": True, "index": True})       # everything has something
+        self.assertTrue({"Notes", "Bibliography", "Index"} <= set(heads), heads)
+        self.assertIn("INDEX", xml)
+        heads, xml = back({"notes": "endnotes", "sources": False, "index": False})     # features off
+        self.assertIn("Notes", heads)
+        self.assertFalse({"Bibliography", "Index"} & set(heads), heads)
+        self.assertNotIn("INDEX", xml)
+        heads, xml = back({"notes": "footnotes", "sources": True, "index": True})      # footnotes: no notes page
+        self.assertNotIn("Notes", heads)
+        self.assertTrue({"Bibliography", "Index"} <= set(heads), heads)
+        (self.lib / "Books" / bid / "manuscript" / files[1]).write_text("# The Harbour\n\nNothing marked.\n",
+                                                                         encoding="utf-8")
+        heads, xml = back({"notes": "endnotes", "sources": True, "index": True})       # nothing to list
+        self.assertFalse({"Notes", "Bibliography", "Index"} & set(heads), heads)
+        self.assertNotIn("INDEX", xml)
+
+    def test_markdown_has_yaml(self):
+        from studio import book_import
+        bid, files = self.make("nl")
+        md = book_export.to_markdown(self.b, bid).decode("utf-8")
+        self.assertTrue(md.startswith("---\ntitle: "))
+        head = md.split("\n---\n")[0]
+        self.assertIn("author: ", head)
+        self.assertIn("A. Writer", head)
+        self.assertIn('lang: "nl"', head)
+        self.assertIn("date: ", head)
+        self.assertIn("subtitle: ", head)
+        got = book_import.propose("book.md", md.encode("utf-8"))
+        self.assertEqual(len(got["pieces"]), 2)
+        self.assertEqual(got["pieces"][-1]["title"], "The Harbour")
 
     def test_zip_contains_the_files(self):
         bid, files = self.make()

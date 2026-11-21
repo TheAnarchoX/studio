@@ -2,12 +2,61 @@
 /* Books: the shelf, a new book, and a book's pages: the writing window (book-editor.js) and its settings (details, kind
    and features, look, style sheet). A classic script after styles.js.
    Globals: showBooks(), showBook(id, tab?, file?), showBookSettings(id, tab?), newBookDialog(), importBookDialog(),
-   showBookImport() (the review screen, #/books/import), bookHash(id, file?),
-   refreshBookView() (the poll calls it when the books changed on disk). */
+   showBookImport() (the review screen, #/books/import), bookHash(id, file?), bookViewTabs(id, current, file?) (Write ·
+   Compose · Settings), BOOK_KEYS (the writing window's tools and keys), refreshBookView() (the poll calls it
+   when the books changed on disk). */
 
 const bookHash = (id, file) => `#/book/${encodeURIComponent(id)}${file ? "/write/" + encodeURIComponent(file) : ""}`;
-const bookTabHash = (id, tab) => tab === "write" ? bookHash(id)
+const bookTabHash = (id, tab) => tab === "write" ? bookHash(id) : tab === "compose" ? bookComposeHash(id)
+  : tab === "board" ? `#/book/${encodeURIComponent(id)}/board`          // the book's research board (board.js)
   : `#/book/${encodeURIComponent(id)}/settings${tab && tab !== "details" ? "/" + tab : ""}`;
+/* Compose (book-compose.js), at a page when given: 1-based, the physical page */
+const bookComposeHash = (id, page) => `#/book/${encodeURIComponent(id)}/compose${page ? "/" + page : ""}`;
+/* A book's views as tabs, Write · Compose · Settings, the one shown marked: over the list of pieces in the writing
+   window, over Compose's contents and in the board's head (the same links; book-compose.css's .bc-tabs, the board's
+   .bd-tabs). Three fit the 272 px column; the board is reached from the rail's Board panel, the palette and the book's
+   Settings tabs, and its page shows these three to go back. Write goes to the piece being written when there is one. */
+const bookViewTabs = (id, current, file) => [["write", "Write", bookHash(id, file)], ["compose", "Compose", bookComposeHash(id)],
+  ["settings", "Settings", bookTabHash(id, "details")]]
+  .map(([k, l, h]) => `<a role="tab" href="${h}" aria-selected="${k === current}"${k === current ? ' aria-current="page"' : ""}>${esc(l)}</a>`).join("");
+/* The tab of the view on screen does nothing: following it would set the view up again (the writing window would open
+   the piece changed last, not the one being written) */
+addEventListener("click", e => {
+  if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.target.closest?.('a[role="tab"][aria-current="page"]')) e.preventDefault();
+});
+
+/* The writing window's tools and their keys: the Keys and tools sheet (book-tools.js, Ctrl+/) and the Info page both show
+   this list. [group, [[tool, keys, what it does, words]]]: a tool without keys has words in their place; a tool given as
+   a list of names is the rail's panels (the sheet lists those the book has). */
+const BOOK_KEYS = [
+  ["Tools", [
+    ["Commands", "Ctrl+K", "Go to a piece, run an action or search the library"],
+    ["Find", "Ctrl+F", "Across the book, with the notes and captions"],
+    ["Find and replace", "Ctrl+H", "Across the book"],
+    ["Focus mode", "Ctrl+Shift+F", "The paragraph you write in, the rest dimmed"],
+    ["Split", "Alt+click", "A second piece beside this one, by Alt+click in the list of pieces or Open beside on its menu"],
+    ["Pages", "Ctrl+Shift+P", "The set pages beside the text, at the cursor's paragraph"],
+    ["Pieces", "Ctrl+\\", "Show or hide the list of pieces"],
+    [["Outline", "Sources", "History", "Comments", "Suggestions", "Board"], "", "The rail's panels", "Their icons, at the right edge"],
+    ["Keys and tools", "Ctrl+/", "Every tool and its keys"],
+  ]],
+  ["Writing", [
+    ["Bold", "Ctrl+B", ""],
+    ["Italic", "Ctrl+I", ""],
+    ["Note", "Ctrl+Alt+F", "At the cursor, or after the selection"],
+    ["Citation", "/", "In the insert menu, or Source on the selection"],
+    ["Index term", "Shift+Alt+X", "For the selection"],
+    ["Comment", "Ctrl+Alt+M", "On the selection"],
+    ["Insert menu", "/", "Note, citation, scene break, epigraph, poem, image, math, table, page break, lists"],
+    ["Style sheet", "Alt+Enter", "Use the style sheet's form at the cursor"],
+    ["Save", "Ctrl+S", "Now; it also saves after a pause"],
+  ]],
+  ["In the window", [
+    ["Back to the text", "Esc", "Leaves focus mode, closes the second pane or the pages, returns from the rail"],
+    ["Move a piece", "Alt+Up / Alt+Down", "In the list of pieces"],
+    ["Everything else", "Right-click", ""],
+  ]],
+];
 
 /* The kinds themselves (their features, first pieces and closing pages, in order) come from the store:
    GET /api/books/kinds, read once (bookKindData). This is only the copy on their cards: kind → [name, what it starts with]. */
@@ -139,7 +188,7 @@ async function newBookDialog() {
 }
 
 /* ——— a book: the writing window and its settings ——— */
-const BOOK_TABS = [["write", "Write"], ["details", "Details"], ["features", "Kind and features"], ["look", "Look"], ["style", "Style sheet"]];
+const BOOK_TABS = [["write", "Write"], ["compose", "Compose"], ["board", "Board"], ["details", "Details"], ["features", "Kind and features"], ["look", "Look"], ["style", "Style sheet"]];
 let bookToken = 0;
 
 /* tab "contents" (the route for #/book/<id> and #/book/<id>/write/<file>) is the writing window */
@@ -151,7 +200,8 @@ async function showBook(id, tab = "contents", file = null) {
       loadBookKinds().catch(() => null)]);         // the kinds and the lists of piece kinds and forms the window offers
     if (my !== bookToken || state.view !== "book") return;       // went elsewhere meanwhile
     state.book = b; state.bookTab = tab === "contents" ? "write" : tab; state.bookFile = file;
-    if (state.bookTab === "write") BookEditor.mount(app, {book: b, file});
+    if (state.bookTab === "write") { window.BookSpell?.setBook(b); BookEditor.mount(app, {book: b, file}); }      // the spelling's languages first: checked as it opens
+    else if (state.bookTab === "board") Board.mount(app, {book: b});      /* part 3: the book's research board */
     else renderBook();
   } catch (e) {
     if (my !== bookToken || state.view !== "book") return;
@@ -197,7 +247,9 @@ async function refreshBookView(force = false) {
     if (e.status === 404 && state.view === "book" && state.book?.id === id) { toast(`${state.book.title} is no longer in Books`, true); state.docDirty = null; location.hash = "#/books"; }
     return;
   }
-  if (state.bookTab === "write") { if (state.view === "book" && state.book?.id === id) BookEditor.refresh(b); return; }
+  if (state.bookTab === "write") { if (state.view === "book" && state.book?.id === id) { window.BookSpell?.setBook(b); BookEditor.refresh(b); } return; }
+  if (state.bookTab === "board") { if (state.view === "book" && state.book?.id === id) { state.book = b; Board.refresh(b); } return; }     /* part 3: the board reads its own */
+  if (state.bookTab === "compose") { if (state.view === "book" && state.book?.id === id) { state.book = b; BookCompose.refresh(b); } return; }
   let looksMoved = false;
   if (state.bookTab === "look") {           // the Look tab also shows the library's looks: read them again too
     const before = JSON.stringify(SD);
@@ -231,7 +283,7 @@ function bookGroups(contents) {
 
 /* ——— details ——— */
 function paintBookDetails(host) {
-  const b = state.book, d = b.details || {}, note = !!b.features?.contentNote;
+  const b = state.book, d = b.details || {}, note = !!b.features?.contentNote, nl = l => /^nl(?:[-_]|$)/i.test(l || "");
   const field = (name, label, value, attrs = "") => `<label><span class="label">${label}</span><input class="input" name="${name}" value="${esc(value ?? "")}" ${attrs}></label>`;
   host.innerHTML = `<form class="sl sd-details" id="bdt" autocomplete="off">
     <section class="sl-row"><label class="label" for="bd-title">Title</label>
@@ -243,9 +295,10 @@ function paintBookDetails(host) {
     <section class="sl-row"><label class="label" for="bd-lang">Language</label>
       <div>${bookLanguageHtml(b.language, "bd-lang")}<p class="hint">The language the book is written in: for spelling, quote marks and numbers.</p></div></section>
     <section class="sl-row"><span class="label">Publication</span>
-      <div><div class="bk-fields">${field("publisher", "Publisher", d.publisher)}${field("edition", "Edition", d.edition, 'placeholder="First edition"')}
-        ${field("year", "Year", d.year, 'inputmode="numeric" maxlength="4"')}${field("isbn", "ISBN", d.isbn, 'spellcheck="false"')}</div>
-        <p class="hint">On the copyright page.</p></div></section>
+      <div><div class="bk-fields${nl(b.language) ? " nur" : ""}">${field("publisher", "Publisher", d.publisher)}${field("edition", "Edition", d.edition, 'placeholder="First edition"')}
+        ${field("year", "Year", d.year, 'inputmode="numeric" maxlength="4"')}${field("isbn", "ISBN", d.isbn, 'spellcheck="false"')}
+        <label data-nur ${nl(b.language) ? "" : "hidden"}><span class="label">NUR</span><input class="input" name="nur" value="${esc(d.nur ?? "")}" inputmode="numeric" maxlength="3" spellcheck="false" placeholder="301" title="NUR, the Dutch book trade's subject code"></label></div>
+        <p class="hint">On the copyright page.<span data-nur ${nl(b.language) ? "" : "hidden"}> NUR is the Dutch book trade's subject code: three digits, like 301.</span></p></div></section>
     <section class="sl-row"><label class="label" for="bd-copy">Copyright</label>
       <div><input class="input" id="bd-copy" name="copyright" value="${esc(d.copyright)}" placeholder="© ${new Date().getFullYear()} ${esc(b.author || "Your name")}"><p class="hint">The line on the copyright page.</p></div></section>
     ${note ? `<section class="sl-row"><label class="label" for="bd-note">Content note</label>
@@ -268,9 +321,17 @@ function paintBookDetails(host) {
     try { dirty = JSON.stringify(read(false)) !== JSON.stringify(saved()); } catch { dirty = true; }
     state.docDirty = dirty ? "details" : null; stat.textContent = dirty ? "Unsaved changes · Ctrl+S" : ""; stat.classList.toggle("dirty", dirty);
   };
-  const language = wireBookLanguage(form, "bd-lang", mark);
-  const details = () => ({publisher: d.publisher ?? "", edition: d.edition ?? "", year: String(d.year ?? ""), isbn: d.isbn ?? "", copyright: d.copyright ?? "",
-    ...(note ? {contentNote: d.contentNote ?? ""} : {})});
+  // NUR shows while the language chosen is Dutch; a NUR stored for another language is kept as it is
+  const showNur = () => {
+    const on = nl($("#bd-lang", form).value || $("#bd-lang-code", form).value.trim());
+    $$("[data-nur]", form).forEach(x => { x.hidden = !on; });
+    $(".bk-fields", form).classList.toggle("nur", on);
+  };
+  const language = wireBookLanguage(form, "bd-lang", () => { showNur(); mark(); });
+  $("#bd-lang-code", form).addEventListener("input", showNur);
+  const withNur = () => d.nur != null || !$("[data-nur]", form).hidden;        // book.json gets no empty NUR it never had
+  const details = () => ({publisher: d.publisher ?? "", edition: d.edition ?? "", year: String(d.year ?? ""), isbn: d.isbn ?? "",
+    ...(withNur() ? {nur: d.nur ?? ""} : {}), copyright: d.copyright ?? "", ...(note ? {contentNote: d.contentNote ?? ""} : {})});
   const saved = () => ({title: b.title, subtitle: b.subtitle || "", author: b.author || "", language: b.language, details: details()});
   const read = (strict = true) => ({title: val("title"), subtitle: val("subtitle"), author: val("author"),
     language: strict ? language() : ($("#bd-lang", form).value || $("#bd-lang-code", form).value.trim()),
@@ -282,6 +343,7 @@ function paintBookDetails(host) {
       const fields = read();
       if (!fields.title) throw new Error("Give the book a title.");
       if (fields.details.year && !/^\d{1,4}$/.test(fields.details.year)) throw new Error("The year is a number, like 2026.");
+      if (fields.details.nur && !$("[data-nur]", form).hidden && !/^\d{3}$/.test(fields.details.nur)) throw new Error("The NUR is three digits, like 301.");
       state.docDirty = null;
       await saveBook(fields, "Saved the details");
     } catch (err) { toast(err.message, true); mark(); }
@@ -318,7 +380,7 @@ function freezeEdition(id) {
   });
 }
 
-const BOOK_EXPORTS = [["docx", "Word (.docx)", "Export as Word (.docx)"], ["md", "Markdown", "Export as Markdown"], ["zip", "Zip", "Export as zip"]];
+const BOOK_EXPORTS = [["pdf", "PDF", "Export as PDF…"], ["docx", "Word (.docx)", "Export as Word (.docx)"], ["md", "Markdown", "Export as Markdown"], ["zip", "Zip", "Export as zip"]];
 function exportName(res, fallback) {
   const cd = res.headers.get("Content-Disposition") || "";
   const star = /filename\*=UTF-8''([^;]+)/i.exec(cd), ascii = /filename="([^"]*)"/i.exec(cd);
@@ -326,8 +388,10 @@ function exportName(res, fallback) {
   return ascii ? ascii[1] : fallback;
 }
 /* The export is a POST (it also writes a dated copy into the book's exports/ folder), fetched so a refusal shows as a
-   message; the file is saved under the name the server gives it. */
-async function downloadBook(id, format) {
+   message; the file is saved under the name the server gives it. A PDF goes through Compose's export dialog first,
+   wherever it was asked for (the checks' summary, never blocking); the dialog itself downloads `direct`. */
+async function downloadBook(id, format, direct = false) {
+  if (format === "pdf" && !direct && typeof BookCompose !== "undefined") return void BookCompose.exportPdf(id);
   try {
     const res = await fetch("/api/book/export", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({b: id, format})});
     if (!res.ok) {
@@ -506,6 +570,55 @@ function paintBookStyleSheet(host) {
     try { state.docDirty = null; await saveBook({style_sheet: sent}, "Saved the style sheet"); }
     catch (err) { toast(err.message, true); mark(); }
   };
+  host.insertAdjacentHTML("beforeend", `<div class="sl bk-end bk-spl" id="bss-spell"></div>`);
+  paintBookSpelling($("#bss-spell", host));
+}
+
+/* ——— spelling: the languages the text is checked in, and the book's word list (book.json "spelling", book-spell.js).
+   Saved at once, without the style sheet's form: its unsaved changes stay. ——— */
+const spellLangName = c => c === "en-GB" ? "English (British)" : BOOK_LANGUAGES.find(([k]) => k === c)?.[1] || c;
+function paintBookSpelling(host) {
+  const b = state.book, sp = b.spelling || {}, langs = sp.languages?.length ? sp.languages : [b.language || "en"], words = sp.words || [];
+  const offer = [...BOOK_LANGUAGES.map(([c]) => c), "en-GB"].filter(c => !langs.some(l => l.toLowerCase() === c.toLowerCase()));
+  const checked = l => !window.BookSpell || BookSpell.covers(l);
+  host.innerHTML = `<section class="sl-row"><span class="label">Spelling</span>
+      <div><p class="sl-src sl-first">The text is checked in these languages at once: a word is right when one of them knows it. A passage marked as another language is checked in that language only.</p>
+        <ul class="bk-eds">${langs.map((l, i) => `<li><span class="bk-ed-d">${esc(l)}</span>
+          <span class="bk-ed-n">${esc(spellLangName(l))}${i ? "" : " · the book's language"}${checked(l) ? "" : " · no dictionary yet, not checked"}</span>
+          ${i ? `<button class="btn small quiet" type="button" data-rmlang="${i}">Remove</button>` : "<span></span>"}</li>`).join("")}</ul></div>
+      <div class="sl-acts">${langs.length < 4 && offer.length ? `<select class="select" id="bsp-lang" aria-label="Add a language"><option value="">Add a language…</option>
+        ${offer.map(c => `<option value="${esc(c)}">${esc(spellLangName(c))}</option>`).join("")}</select>` : ""}</div></section>
+    <section class="sl-row"><span class="label">Word list</span>
+      <div><p class="sl-src sl-first">Words that are right in this book, such as names. Add one here, or right-click an underlined word in the text.</p>
+        <ul class="bk-eds bk-words">${words.map((w, i) => `<li><span class="bk-ed-n">${esc(w)}</span><button class="btn small quiet" type="button" data-rmword="${i}">Remove</button></li>`).join("")}</ul></div>
+      <div class="sl-acts"><input class="input" id="bsp-word" placeholder="A word" aria-label="A word for the list" spellcheck="false" maxlength="60" autocomplete="off">
+        <button class="btn small" type="button" id="bsp-add">Add</button></div></section>`;
+  /* change(spelling as it is on disk now: a right-click in the text may have added a word since) → the fields to send */
+  const save = async (change, msg, focus) => {
+    try {
+      const now = (await api("/api/book?b=" + encodeURIComponent(b.id))).spelling || {languages: langs, words: []};
+      const r = await api("/api/book/update", {b: b.id, fields: {spelling: change({languages: now.languages || langs, words: now.words || []})}});
+      if (state.view !== "book" || state.book?.id !== r.id) return;
+      state.book = r;
+      if (host.isConnected) { paintBookSpelling(host); if (focus) $(focus, host)?.focus(); }
+      toast(msg);
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#bsp-lang", host)?.addEventListener("change", e => {
+    const l = e.target.value;
+    if (l) save(sp => ({languages: sp.languages.includes(l) ? sp.languages : [...sp.languages, l]}), `Spelling: ${spellLangName(l)} added`, "#bsp-lang");
+  });
+  $$("[data-rmlang]", host).forEach(btn => btn.onclick = () => { const l = langs[+btn.dataset.rmlang]; save(sp => ({languages: sp.languages.filter(x => x !== l)}), `Spelling: ${spellLangName(l)} removed`); });
+  $$("[data-rmword]", host).forEach(btn => btn.onclick = () => { const w = words[+btn.dataset.rmword]; save(sp => ({words: sp.words.filter(x => x !== w)}), `Removed ${w} from the word list`); });
+  const add = () => {
+    const w = $("#bsp-word", host).value.trim();
+    if (!w) return;
+    if (/\s/.test(w)) { toast("Add one word at a time.", true); return; }
+    if (words.includes(w)) { toast(`${w} is in the word list`); return; }
+    save(sp => ({words: sp.words.includes(w) ? sp.words : [...sp.words, w]}), `Added ${w} to the word list`, "#bsp-word");
+  };
+  $("#bsp-add", host).onclick = add;
+  $("#bsp-word", host).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); add(); } });
 }
 
 /* Ctrl+S saves the details or the style sheet. */

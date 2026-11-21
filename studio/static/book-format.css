@@ -1,0 +1,33 @@
+/* The writing window's formatting (book-format.js): lists, alignment, underline, strikethrough and sizes in the text and
+   in a note's text. Loaded after book.css and book-tools.css. Everything here takes the text's own colour, so light and
+   dark follow app.css's theme roles (--paper through .bw-page); measures are in em, of the book's own face. */
+
+/* ——— lists: each item hangs its marker in a gutter. --bk-mw (book-format.js) is as wide as the widest marker of the
+   item's list, at least 1em; numbers and letters stand right-aligned in it, so 9. and 10. and VIII. line up on their full
+   stops, bullets centred; every item of a list has one text edge. --bk-in, the indent, puts a sublist at its parent
+   item's text edge (book-format.js reckons it with this gap, its GAP). The items of a list stand closer together than
+   paragraphs; after the last one, and between two lists side by side (bk-li-apart), a paragraph's space. ——— */
+.bk-text p.bk-li{--bk-gap:.5em;margin-bottom:.3em;padding-left:calc(var(--bk-in,0em) + var(--bk-mw,1em) + var(--bk-gap))}
+.bk-text p.bk-li:not(:has(+p.bk-li)){margin-bottom:.65em}
+.bk-text p.bk-li.bk-li-apart{margin-top:.65em}
+/* in the first line's flow (it sits on the line's baseline, whatever size the text starts with), pulled back into the
+   gutter by exactly its own width */
+.bk-text p.bk-li::before{content:attr(data-marker);display:inline-block;width:var(--bk-mw,1em);margin:0 var(--bk-gap) 0 calc(-1 * (var(--bk-mw,1em) + var(--bk-gap)));
+  text-align:right;font-style:normal;font-variant-numeric:lining-nums tabular-nums;white-space:nowrap}
+.bk-text p.bk-li[data-list=bullet]::before{text-align:center}
+
+/* ——— centred and right-aligned paragraphs; nothing else marks them ——— */
+.bk-text .bk-align[data-align=center]>p{text-align:center}
+.bk-text .bk-align[data-align=right]>p{text-align:right}
+
+/* ——— underline: solid, 1px, in the text colour, closer to the text than an index term's dotted line (.24em) and the
+   echoes' line; strikethrough: 1px through the middle ——— */
+:is(.bk-text,.bm-ed) u{text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:currentColor;text-decoration-thickness:1px;
+  text-underline-offset:.12em}
+:is(.bk-text,.bm-ed) s{text-decoration-line:line-through;text-decoration-style:solid;text-decoration-color:currentColor;text-decoration-thickness:1px}
+
+/* ——— sizes: four steps around the text's own size (Normal is no size at all) ——— */
+:is(.bk-text,.bm-ed) .bk-size[data-size=x-small]{font-size:.75em}
+:is(.bk-text,.bm-ed) .bk-size[data-size=small]{font-size:.875em}
+:is(.bk-text,.bm-ed) .bk-size[data-size=large]{font-size:1.2em}
+:is(.bk-text,.bm-ed) .bk-size[data-size=x-large]{font-size:1.44em}

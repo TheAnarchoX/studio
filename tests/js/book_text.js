@@ -1,15 +1,17 @@
 /* Runs the writing window's pure helpers (studio/static/book-text.js) in node. Used by tests/test_book_text.py.
 
-     node book_text.js <prosemirror.js> <book-schema.js> <book-text.js> <input.json>
+     node book_text.js <prosemirror.js> <book-schema.js> <book-text.js> <input.json> <book-format.js>
      input: [{"doc": document, "words": manuscript.counts words}, ...]
-     output: {"failures": [{"name", "got", "want"}], "checked": n}   */
+     output: {"failures": [{"name", "got", "want"}], "checked": n}
+   book-format.js loads before book-text.js, as in the app (index.html).   */
 "use strict";
 const fs = require("fs"), vm = require("vm");
-const [pm, schema, text, input] = process.argv.slice(2);
+const [pm, schema, text, input, format] = process.argv.slice(2);
 globalThis.window = globalThis;
 vm.runInThisContext(fs.readFileSync(pm, "utf8"));
 if (typeof PM !== "undefined") globalThis.PM = PM;
 vm.runInThisContext(fs.readFileSync(schema, "utf8"));
+vm.runInThisContext(fs.readFileSync(format, "utf8"));
 vm.runInThisContext(fs.readFileSync(text, "utf8"));
 const T = globalThis.BookText, S = globalThis.BookSchema, node = json => globalThis.PM.Node.fromJSON(S, json);
 const failures = [];
@@ -73,16 +75,40 @@ eq("keys as manuscript.CITE_KEY", ["smith2020", "a:b.c", "x-", "-x", "één"].ma
 
 // the / menu and the bar follow the features
 const memoir = {notes: "endnotes", sources: false, index: false}, all = {notes: "footnotes", sources: true, index: true};
-eq("/ for a memoir", T.slashItems("", memoir).map(i => i.label), ["Note", "Scene break", "Epigraph", "Poem", "Image", "Page break", "Linked poem"]);
-eq("/ with everything on", T.slashItems("", all).map(i => i.id), ["note", "cite", "scene", "epigraph", "poem", "image", "page", "linked"]);
-eq("/ for fiction", T.slashItems("", {notes: "off"}).map(i => i.id), ["scene", "epigraph", "poem", "image", "page", "linked"]);
-eq("/ filtered: starts first, then a word", T.slashItems("p", all).map(i => i.label), ["Poem", "Page break", "Linked poem"]);
-eq("/ filtered: inside a word from two letters", T.slashItems("gra", all).map(i => i.label), ["Epigraph"]);
-eq("/ filtered: a word", T.slashItems("break", all).map(i => i.label), ["Scene break", "Page break"]);
-eq("/ filtered: nothing", T.slashItems("xyz", all), []);
-eq("bar with everything on", T.barButtons(all).map(b => b[1]), ["Bold", "Italic", "Note", "Source", "Index", "Comment"]);
-eq("bar for fiction", T.barButtons({notes: "off", sources: false, index: false}).map(b => b[0]), ["bold", "italic", "comment"]);
-eq("no Index for an index of first lines", T.barButtons({index: "first-lines"}).map(b => b[0]), ["bold", "italic", "comment"]);
+eq("/ for a memoir", T.slashItems("", memoir, "prose").map(i => i.label),
+  ["Note", "Scene break", "Epigraph", "Poem", "Image", "Math", "Table", "Page break", "Linked poem", "Bulleted list", "Numbered list"]);
+eq("/ with everything on", T.slashItems("", all, "prose").map(i => i.id),
+  ["note", "cite", "scene", "epigraph", "poem", "image", "math", "table", "page", "linked", "bullets", "numbers"]);
+eq("/ for fiction", T.slashItems("", {notes: "off"}, "prose").map(i => i.id), ["scene", "epigraph", "poem", "image", "math", "table", "page", "linked", "bullets", "numbers"]);
+eq("/ lists and tables only in prose pieces", T.slashItems("", all, "poem").map(i => i.id), ["note", "cite", "scene", "epigraph", "poem", "image", "math", "page", "linked"]);
+eq("/ filtered: table", [T.slashItems("tab", all, "prose").map(i => i.id), T.slashItems("tab", all, "poem")], [["table"], []]);
+eq("/ filtered: starts first, then a word", T.slashItems("p", all, "prose").map(i => i.label), ["Poem", "Page break", "Linked poem"]);
+eq("/ filtered: inside a word from two letters", T.slashItems("gra", all, "prose").map(i => i.label), ["Epigraph"]);
+eq("/ filtered: a word", T.slashItems("break", all, "prose").map(i => i.label), ["Scene break", "Page break"]);
+eq("/ filtered: lists", [T.slashItems("list", all, "prose").map(i => i.id), T.slashItems("num", all, "prose").map(i => i.id), T.slashItems("list", all, "poem")],
+  [["bullets", "numbers"], ["numbers"], []]);
+eq("/ in a list: not the style it already is", [T.slashItems("list", all, "prose", "bullet").map(i => i.id), T.slashItems("list", all, "prose", "decimal").map(i => i.id),
+  T.slashItems("list", all, "prose", "lower-alpha").map(i => i.id)], [["numbers"], ["bullets"], ["bullets", "numbers"]]);
+eq("/ filtered: nothing", T.slashItems("xyz", all, "prose"), []);
+eq("bar with everything on", T.barButtons(all).map(b => b[1]), ["Bold", "Italic", "Note", "Source", "Index", "Comment", "Format"]);
+eq("bar for fiction", T.barButtons({notes: "off", sources: false, index: false}).map(b => b[0]), ["bold", "italic", "comment", "format"]);
+eq("no Index for an index of first lines", T.barButtons({index: "first-lines"}).map(b => b[0]), ["bold", "italic", "comment", "format"]);
+eq("bar across blocks", [T.barButtons(all, {multi: true}).map(b => b[0]), T.barButtons(memoir, {multi: true}).map(b => b[0])],
+  [["bold", "italic", "format"], ["bold", "italic", "format"]]);
+eq("bar in a note's text", [T.barButtons(all, {inNote: true}).map(b => b[0]), T.barButtons(memoir, {inNote: true}).map(b => b[0]),
+  T.barButtons(all, {inNote: true, multi: true}).map(b => b[0])], [["bold", "italic", "source", "format"], ["bold", "italic", "format"], ["bold", "italic", "source", "format"]]);
+
+// the bar's pressed buttons: Bold and Italic as the format panel shows them and as they toggle (BookFormat.current: a
+// note's own text keeps its formatting, so its bold doesn't press Bold); Index and Comment when some of the text has them
+const barDoc = node({type: "doc", attrs: {form: "prose"}, content: [{type: "paragraph", content: [{type: "text", text: "Een "},
+  {type: "note", content: [{type: "text", text: "noot", marks: [{type: "strong"}, {type: "em"}]}]}, {type: "text", text: " twee", marks: [{type: "comment", attrs: {note: "n"}}]}]},
+  {type: "paragraph", content: [{type: "text", text: "Vet", marks: [{type: "strong"}]}, {type: "text", text: " niet"}]}]});
+const barOn = (from, to) => { const P0 = globalThis.PM, st = P0.EditorState.create({doc: barDoc, selection: P0.TextSelection.create(barDoc, from, to)});
+  return typeof T.barPressed === "function" ? T.barPressed(st) : "no barPressed"; };
+eq("bar pressed: a note's own bold and italic press nothing; some bold presses Bold; a comment presses Comment",
+  [barOn(1, 11), barOn(1, 16), barOn(18, 23)],
+  [{bold: false, italic: false, index: false, comment: false}, {bold: false, italic: false, index: false, comment: true},
+   {bold: true, italic: false, index: false, comment: false}]);
 
 // comments as ranges
 const c = (note, text) => ({type: "text", text, marks: [{type: "comment", attrs: {note}}]});
@@ -117,6 +143,25 @@ const typed = (doc, pos, text) => {        // what the rule does when `text` is 
 eq("## at the start of the title is left alone", typed({type: "doc", content: [{type: "title", content: [{type: "text", text: "##"}]}]}, 3, " "), null);
 eq("## at the start of a paragraph is a heading", typed({type: "doc", content: [{type: "title", content: [{type: "text", text: "T"}]}, {type: "paragraph", content: [{type: "text", text: "##"}]}]}, 6, " "), ["title", "heading2"]);
 eq("### in a quotation does nothing", typed({type: "doc", content: [{type: "blockquote", content: [{type: "paragraph", content: [{type: "text", text: "###"}]}]}]}, 5, " "), null);
+
+/* types `text` at the end of a one-paragraph document with these input rules, as the editor does (handleTextInput) */
+const typeRules = (rules, text, form = "prose") => {
+  const doc = node({type: "doc", attrs: {form}, content: [{type: "paragraph"}]});
+  let state = P.EditorState.create({doc, plugins: [P.inputRules({rules})], selection: P.TextSelection.create(doc, 1)});
+  for (const ch of text) {
+    const view = {composing: false, state, dispatch(tr) { this.state = this.state.apply(tr); }}, {from, to} = state.selection;
+    if (!state.plugins.some(p => p.props.handleTextInput && p.props.handleTextInput(view, from, to, ch))) view.dispatch(state.tr.insertText(ch, from, to));
+    state = view.state;
+  }
+  return state.doc.toJSON().content;
+};
+eq("strike:typing ~~weg~~ is struck through", typeRules(T.inlineRules(() => "“…”"), "nu ~~weg~~ en"),
+  [{type: "paragraph", content: [{type: "text", text: "nu "}, {type: "text", marks: [{type: "strike"}], text: "weg"}, {type: "text", text: " en"}]}]);
+eq("strike:typing not with a space inside the edge, nor ~ alone", [typeRules(T.inlineRules(() => "“…”"), "~~ weg~~")[0].content, typeRules(T.inlineRules(() => "“…”"), "~weg~")[0].content],
+  [[{type: "text", text: "~~ weg~~"}], [{type: "text", text: "~weg~"}]]);
+eq("strike:typing at a line's start, one letter", typeRules(T.inlineRules(() => "“…”"), "~~x~~")[0].content, [{type: "text", marks: [{type: "strike"}], text: "x"}]);
+eq("lists:typing the triggers are among the text's rules", [typeRules(T.blockRules(() => "“…”"), "- Een")[0], typeRules(T.blockRules(() => "“…”"), "- Een", "poem")[0].type],
+  [{type: "list_item", attrs: {list: "bullet", level: 0, start: null}, content: [{type: "text", text: "Een"}]}, "paragraph"]);
 
 // the margin does nothing once its text is gone (an image loading late, fonts arriving)
 const fake = () => ({className: "", style: {setProperty() {}}, children: [], append(...c) { this.children.push(...c); }, setAttribute() {},
@@ -173,6 +218,73 @@ eq("pasted at a line start: each line keeps its indentation", pasted.content.toJ
   [`${NB}${NB}eerste`, "|", `${NB}${NB}tweede`, "|", "derde"]);
 const pastedMid = T.poemPasted(sliceOf([para(txt(" na"), br, txt("  volgende"))], 1), false);
 eq("pasted within a line: its first line continues it", pastedMid.content.toJSON()[0].content.map(n => n.text || "|"), [" na", "|", `${NB}${NB}volgende`]);
+const li = (list, level, ...c) => ({type: "list_item", attrs: {list, level, start: null}, content: c});
+const pastedList = T.poemPasted(sliceOf([li("decimal", 0, txt("Een")), li("lower-alpha", 1, txt("Sub")), li("bullet", 0, txt("  Punt"))], 0), true);
+eq("list items pasted into a poem line: lines led by their marker", pastedList.content.toJSON().map(n => [n.type, n.content.map(c => c.text).join("")]),
+  [["paragraph", "1. Een"], ["paragraph", `${NB}${NB}a. Sub`], ["paragraph", "•   Punt"]]);
+// what a paste or a drop brings in (the view's transformPasted): in a poem piece no list item, wherever the cursor is
+const listSlice = sliceOf([li("decimal", 0, txt("Een")), li("decimal", 0, txt("Twee"))], 0);
+const pastedTypes = (doc, pos) => T.pasted(listSlice, doc.resolve(pos)).content.toJSON().map(n => n.type + ":" + (n.content || []).map(c => c.text).join(""));
+eq("pasted into a poem piece outside a poem line: lines, not items", [pastedTypes(poemDoc, 3), pastedTypes(proseDoc, 2)],
+  [["paragraph:1. Een", "paragraph:2. Twee"], ["list_item:Een", "list_item:Twee"]]);
+// a table pasted into a poem piece or a poem line: a line per row, its cells joined by " | "; in prose it stays a table
+const tcell = (...c) => (c.length ? {type: "table_cell", content: c} : {type: "table_cell"});
+const trow = (...c) => ({type: "table_row", content: c});
+const tableSlice = sliceOf([para(txt("Voor")), {type: "table", attrs: {header: true, align: [null, "right"]},
+  content: [trow(tcell(txt("Naam")), tcell(txt("Jaar"))), trow(tcell({type: "text", text: "Een", marks: [{type: "em"}]}), tcell())]}], 0);
+const tableIn = (doc, pos) => T.pasted(tableSlice, doc.resolve(pos)).content.toJSON().map(n => [n.type, (n.content || []).map(c => c.text + (c.marks ? "*" : "")).join("")]);
+eq("pasted table into a poem piece, a poem line, prose", [tableIn(poemDoc, 3), tableIn(proseDoc, 10), tableIn(proseDoc, 2).map(b => b[0])],
+  [[["paragraph", "Voor"], ["paragraph", "Naam | Jaar"], ["paragraph", "Een* | "]], [["paragraph", "Voor"], ["paragraph", "Naam | Jaar"], ["paragraph", "Een* | "]],
+   ["paragraph", "table"]]);
+const openCell = T.pasted(sliceOf([{type: "table", attrs: {header: true, align: [null]}, content: [trow(tcell(txt("woord")))]}], 3), poemDoc.resolve(3));
+eq("pasted from inside a cell into a poem piece: the words, open into the line", [openCell.openStart, openCell.openEnd, openCell.content.toJSON()],
+  [1, 1, [{type: "paragraph", content: [{type: "text", text: "woord"}]}]]);
+// pasted or dropped into a table's cell: one line of it, whatever comes in; the table keeps its rows and columns
+const host = node({type: "doc", attrs: {form: "prose"}, content: [para(txt("Voor")), {type: "table", attrs: {header: true, align: [null, null]},
+  content: [trow(tcell(txt("Naam")), tcell(txt("Jaar"))), trow(tcell(txt("Een")), tcell(txt("1990")))]}, para(txt("Na"))]});
+let inEen = null;
+host.descendants((n, p) => { if (inEen == null && n.type.name === "table_cell" && n.textContent === "Een") inEen = p + 2; });   // after "E"
+const grid = d => d.content.content.map(n => (n.type.name === "table" ? n.content.content.map(r => r.content.content.map(c => c.textContent))
+  : n.type.name + ":" + n.textContent));
+const docSlice = (blocks, open) => { const d = node({type: "doc", attrs: {form: "prose"}, content: blocks}); return d.slice(open, d.content.size - open); };
+function intoCell(slice) {
+  const st = P2.EditorState.create({doc: host, selection: P2.TextSelection.create(host, inEen)});
+  const tr = st.tr.replaceSelection(T.pasted(slice, st.selection.$from));
+  tr.doc.check();
+  return tr.doc;
+}
+const cellOf = d => grid(d)[1][1][0];
+const otherTable = node({type: "doc", attrs: {form: "prose"}, content: [{type: "table", attrs: {header: true, align: [null, null]},
+  content: [trow(tcell(txt("a")), tcell(txt("b"))), trow(tcell(txt("c")), tcell(txt("d")))]}]});
+const li2 = s => li("bullet", 0, txt(s));
+const intoCellDocs = [
+  intoCell(docSlice([para(txt("Alpha")), para(txt("Beta"))], 0)), intoCell(docSlice([para(txt("Alpha")), para(txt("Beta"))], 1)),
+  intoCell(docSlice([li2("Een"), li2("Twee")], 1)), intoCell(docSlice([{type: "heading", attrs: {level: 2}, content: [txt("Kop")]}], 0)),
+  intoCell(docSlice([{type: "image", attrs: {src: "../images/a.png", alt: "", width: null}}], 0)), intoCell(tableSlice),
+  intoCell(otherTable.slice(3, otherTable.content.size - 3)), intoCell(otherTable.slice(1, otherTable.content.size - 1)),
+  intoCell(docSlice([para(txt("a"), br, txt("b")), {type: "scene_break"}, {type: "blockquote", content: [para(txt("c"))]}], 0)),
+];
+eq("pasted into a cell: one line, the table as it was around it", [intoCellDocs.map(cellOf), intoCellDocs.map(d => grid(d).length),
+  intoCellDocs.map(d => grid(d)[1].map(r => r.length))],
+  [["EAlpha Betaen", "EAlpha Betaen", "EEen Tweeen", "EKopen", "Een", "EVoor Naam | Jaar Een | en", "Ea | b c | den", "Ea | b c | den", "Ea b cen"],
+   intoCellDocs.map(() => 3), intoCellDocs.map(() => [2, 2])]);
+const mathIn = intoCell(docSlice([{type: "math_display", attrs: {tex: "x^2"}}], 0));
+let mathInCell = null;
+mathIn.descendants(n => { if (n.type.name === "math") mathInCell = n.attrs.tex; });
+eq("pasted into a cell: display math as inline math, marks kept", [mathInCell, JSON.stringify(intoCellDocs[5].toJSON()).includes('"marks":[{"type":"em"}],"text":"Een"')],
+  ["x^2", true]);
+/* a drop (the view's handleDrop): at the cell under the pointer; a move takes the dragged text away; nothing that holds no text */
+function dropAt(pos, slice, moved, sel = null) {
+  const st0 = P2.EditorState.create({doc: host, selection: sel ? P2.TextSelection.create(host, sel[0], sel[1]) : undefined});
+  const view = {state: st0, dispatch(tr) { this.state = this.state.apply(tr); }, focus() {}, posAtCoords: () => ({pos, inside: -1})};
+  return [T.cellDrop(view, {clientX: 0, clientY: 0}, slice, moved), view.state];
+}
+const dropped = dropAt(inEen, docSlice([para(txt("Alpha")), para(txt("Beta"))], 0), false);
+const movedIn = dropAt(inEen, host.slice(1, 5), true, [1, 5]);
+const imageDrop = dropAt(inEen, docSlice([{type: "image", attrs: {src: "../images/a.png", alt: "", width: null}}], 0), true);
+eq("dropped into a cell: one line; a move; an image not", [dropped[0], cellOf(dropped[1].doc), movedIn[0], grid(movedIn[1].doc)[0], cellOf(movedIn[1].doc),
+  imageDrop[0], imageDrop[1].doc.eq(host), dropAt(2, docSlice([para(txt("x"))], 0), false)[0]],
+  [true, "EAlpha Betaen", true, "paragraph:", "EVooren", true, true, false]);
 const plain = T.poemText("  een\n    twee\n\n\tdrie\nvier\n", [], true);
 eq("plain text pasted: lines and stanzas stay, indented", plain.content.toJSON().map(p => (p.content || []).map(n => n.text || "|")),
   [[`${NB}${NB}een`, "|", `${NB}${NB}${NB}${NB}twee`], [`${NB}${NB}drie`, "|", "vier"]]);
@@ -181,4 +293,4 @@ eq("plain text pasted within a line: its first line as it is", T.poemText(" x\ny
 const pastedInto = (() => { const st = P2.EditorState.create({doc: poemDoc}); return st.apply(st.tr.replace(poemDoc.content.size - 1, poemDoc.content.size - 1, pasted)).doc; })();
 const indentedDocs = [typedPoem.doc.toJSON(), firstLine.doc.toJSON(), inBlock.doc.toJSON(), pastedInto.toJSON()];
 
-console.log(JSON.stringify({failures, checked, typed: indentedDocs}));
+console.log(JSON.stringify({failures, checked, typed: indentedDocs, cells: [...intoCellDocs, mathIn, dropped[1].doc, movedIn[1].doc].map(d => d.toJSON())}));

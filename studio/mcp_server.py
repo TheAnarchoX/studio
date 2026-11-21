@@ -27,7 +27,17 @@ Making a carousel: read_poem -> get_rules and list_concepts (always read the ser
 write_brief (from the poem's own mechanics) -> set_slides -> render -> qa -> look at the contact sheet,
 fix what QA or your eye finds (concept code lives in the series' _kit/concepts/*.js) -> render again.
 The poet sees every render live in Studio. A poem can be named by id
-("<Series>/<Poem folder>"), folder name, title or slug."""
+("<Series>/<Poem folder>"), folder name, title or slug.
+
+Books are in Books/<Book>/: book.json, one Markdown file per piece in manuscript/, sources.json. The author writes;
+you never change the text. You read (list_books, read_book, read_piece, search_book, list_sources), add sources
+(add_source) and propose (suggest: edits, notes, index terms, citations, comments), which wait in the writing
+window until the author accepts or rejects them; list_suggestions shows what is waiting and what was decided. The
+text is Markdown: notes ^[…], citations [@key, p. 12], index terms [words]{.idx term="…"}, the author's comments
+[words]{.comment note="…"}, small caps [words]{.smallcaps}, poems ::: poem … :::. Quote words without that markup.
+A book is named by its id or title; a piece by its file name or title.
+Design: get_book_design and set_book_design read and change the book's design; render_pages shows pages; export_pdf makes the PDF; preflight runs the print checks.
+Research: list_research, read_research and add_research read and add notes, quotes, sources and links on a book's board or the shared board."""
 
 server = MCPServer("studio", title="Studio", instructions=INSTRUCTIONS, log_level="WARNING")
 logging.getLogger("fontTools").setLevel(logging.WARNING)
@@ -283,6 +293,9 @@ def _render_server():
         _server_url = f"http://127.0.0.1:{httpd.server_address[1]}"
     return _server_url
 
+
+
+from . import mcp_books  # noqa: E402,F401  (registers the book tools; mcp_books imports this module, so it comes last)
 
 
 def main():

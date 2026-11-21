@@ -1,6 +1,6 @@
 [project]
 name = "studio-poems"
-version = "1.2.0"
+version = "1.3.0"
 description = "A local studio for poems and their artwork: notebook, carousel renders with pixel QA, a design editor, and MCP tools for Claude"
 readme = "README.md"
 license = "MIT"
@@ -9,7 +9,9 @@ license-files = ["LICENSE", "studio/static/fonts/OFL-*.txt",
 authors = [{name = "TheAnarchoX", email = "theanarchox@proton.me"}]
 requires-python = ">=3.11"
 dependencies = ["mcp>=2.3,<3", "fonttools>=4.60", "pillow>=11", "numpy>=2", "brotli>=1.1",
-                "markdown-it-py>=3", "mdit-py-plugins>=0.4", "python-docx>=1.1", "mammoth>=1.8"]
+                # markdown-it-py: studio/manuscript_lists.list_rule is a copy of its 4.x list rule and imports that
+                # rule's helpers (markTightParagraphs, skipBulletListMarker); check both when markdown-it-py changes
+                "markdown-it-py>=3", "mdit-py-plugins>=0.4", "python-docx>=1.1", "mammoth>=1.8", "typst==0.15.2"]
 keywords = ["poetry", "design", "carousel", "instagram", "mcp", "claude"]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -41,4 +43,5 @@ build-backend = "setuptools.build_meta"
 packages = ["studio"]
 
 [tool.setuptools.package-data]
-studio = ["static/*", "static/fonts/*", "static/icons/*", "static/styles/*/*", "static/vendor/*"]
+studio = ["static/*", "static/fonts/*", "static/icons/*", "static/styles/*/*", "static/vendor/*",
+                        "static/vendor/katex/*", "static/vendor/katex/fonts/*", "static/dictionaries/*/*", "typeset_template.typ"]

@@ -9,36 +9,61 @@ order of SCHEMA["marks"], and adjacent text nodes with the same marks are merged
 
 `serialize` writes the canonical form, which `parse` reads back unchanged:
 - blocks separated by one blank line, one newline at the end, LF only;
-- `*em*`, `**strong**`; span marks on the same range combine into one span with a fixed order,
-  `[text]{.idx .comment .smallcaps term="…" note="…" lang=en}` (`term`/`note` always quoted, with
-  \" \\ \{ \} escaped; `lang` bare when it is letters, digits and hyphens);
-- notes `^[…]`, citations `[see @key, p. 12; @other]`, a hard break is a backslash at the line end
-  (in poems a plain line break, stanzas separated by a blank line);
-- a backslash before \ * _ [ ] ` ^ and, at a line start, before # > - + = :::, and before the . or )
-  after a number; `\!` before a citation, `\{` after one; no-break spaces that start a block as an entity.
-Italic or bold that CommonMark can't write (punctuation at its edge next to a letter outside, `x*(y)*z`)
-is narrowed to what it can (`x(*y*)z`), or dropped; it never comes back as printed asterisks.
+- `*em*`, `**strong**`, `~~strike~~`; span marks on the same range combine into one span with a fixed order,
+  `[text]{.idx .comment .smallcaps .underline .large term="…" note="…" lang=en}` (one size of `SIZES`;
+  `term`/`note` always quoted, with \" \\ \{ \} \| escaped; `lang` bare when it is letters, digits and hyphens);
+- notes `^[…]`, citations `[see @key, p. 12; @other]` (leaving out `[];`, with \\ \| \$ escaped), a hard break is a
+  backslash at the line end (in poems a plain line break, stanzas separated by a blank line);
+- centred and right-aligned paragraphs in `::: center` / `::: right` fences, neighbours with the same
+  alignment in one fence (in a poem piece they hold stanzas);
+- lists (flat `list_item` blocks; manuscript_lists.py has the rules): `- `, `1. `, `a. `, `i. `, `A.  `, `I.  `,
+  nested items and continued lines indented to the item's text, tight; a numbered list right after another at its
+  level takes the other delimiter (`a. een` then `i) een`);
+- tables as pipe tables: `| a | b |` with one space each side (an empty cell `|  |`), delimiter cells `---`, `:--`,
+  `:-:`, `--:`, every row as many cells as the table has columns; a table without a header has an empty first row;
+  a cell is one line (a line break in its notes is a space), with a no-break space at either end as an entity;
+- LaTeX math as Pandoc's `tex_math_dollars` reads it: inline `$E = mc^2$` (one line, no space next to the dollars, no
+  lone backslash at its end; in a table cell `|` is `\vert` and `\|` `\Vert`; a digit right after it as an entity),
+  display math as `$$`, its lines (no blank ones), `$$`, a block of its own; a `$` that would end the math is `\$`
+  (in inline math any outside `\text{…}`, in display math dollars side by side), empty math isn't written;
+- a backslash before \ * _ [ ] ` ^ ~ | $ and, at a line start, before # > - + = :::, before the . or ) after a
+  number, wherever a list marker would be read (`a\.`, `iv\.`, `A\)`, `\(a)`, `\(1)`) and before a `:-` line that
+  would make the line above it a table's header; `\!` before a citation, `\{` after one; no-break spaces that start
+  a block as an entity.
+Italic, bold or strikethrough that CommonMark can't write (punctuation at its edge next to a letter outside,
+`x*(y)*z`) is narrowed to what it can (`x(*y*)z`), or dropped; it never comes back as printed asterisks or tildes.
 
 Poem lines are not read as Markdown blocks: inside `::: poem` there are only lines and stanzas, and a piece
 whose form is poem keeps the dialect's blocks (title, `##` headings, quotations, scene breaks, `:::`
-blocks) but reads lists and underlined headings as lines.
+blocks) but reads lists, tables and underlined headings as lines.
 """
 import re
+import textwrap
+from itertools import groupby
 
 from markdown_it import MarkdownIt
 from markdown_it.common.utils import isMdAsciiPunct, isPunctChar, isWhiteSpace
 from mdit_py_plugins.attrs import attrs_plugin
 from mdit_py_plugins.attrs.parse import ParseError, parse as parse_attrs
 from mdit_py_plugins.colon_fence import colon_fence_plugin
+from mdit_py_plugins.dollarmath import dollarmath_plugin
+from mdit_py_plugins.dollarmath.index import math_block_dollar
 from mdit_py_plugins.footnote import footnote_plugin
 
-SCHEMA = {"nodes": ["doc", "title", "heading", "paragraph", "blockquote", "scene_break", "epigraph", "attribution",
-                    "poem", "image", "page_break", "hard_break", "note", "cite", "text"],
-          "marks": ["em", "strong", "idx", "comment", "smallcaps", "lang"]}
+from .manuscript_lists import escape_line_start, list_rule, markers, md_marker, normalize
+
+SCHEMA = {"nodes": ["doc", "title", "heading", "paragraph", "list_item", "aligned", "blockquote", "scene_break",
+                    "epigraph", "attribution", "poem", "image", "page_break", "table", "table_row", "table_cell",
+                    "math_display", "hard_break", "note", "cite", "math", "text"],
+          "marks": ["em", "strong", "idx", "comment", "smallcaps", "lang", "underline", "strike", "size"]}
+SIZES = ("x-small", "small", "large", "x-large")     # the size mark's steps; normal text has no size mark
+ALIGNS = ("center", "right")                         # an aligned block's alignment; "as the book" has no block
+COLUMN_ALIGNS = ("left", "center", "right")          # a table column's alignment; None is as the book
 
 _RANK = {name: i for i, name in enumerate(SCHEMA["marks"])}
-_SPAN = ("idx", "comment", "smallcaps", "lang")      # span marks, in the order they are written
-_FENCES = ("epigraph", "poem", "pagebreak")
+_SPAN = ("idx", "comment", "smallcaps", "underline", "size", "lang")     # span marks, in the order they are written
+_RUNS = ("em", "strong", "strike")                   # marks written with delimiters around the text
+_FENCES = ("epigraph", "poem", "pagebreak") + ALIGNS
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -53,6 +78,7 @@ _ATTR_BLOCK = re.compile(r"\{([^{}\n]*)\}")
 _ATTR = re.compile(r'(?:\.(?P<cls>[^\s.#{}"=]+)|#[^\s.#{}"=]+|(?P<key>[\w:-]+)='
                    r'(?:"(?P<quoted>(?:[^"\\]|\\.)*)"|(?P<bare>[^\s"{}]+)))\s*', re.S)
 _ESCAPED = re.compile(r"\\(.)", re.S)
+_CITE_ESCAPED = re.compile(r"\\([\\|$])")     # the only escapes inside a citation
 
 
 def _squash(s):
@@ -64,13 +90,18 @@ def _unescape(value):
 
 
 def _cite_items(body):
-    """`see @a, p. 3; @b` -> [{"key", "prefix", "locator"}], or None when it isn't a citation."""
+    """`see @a, p. 3; @b` -> [{"key", "prefix", "locator"}], or None when it isn't a citation. `\\|`, `\\$` and `\\\\`
+    are a pipe, a dollar and a backslash (as the writer writes them); any other backslash is itself, as v1.2 wrote
+    it."""
+    def text(s):
+        return _CITE_ESCAPED.sub(r"\1", s or "")
     items = []
     for part in body.split(";"):
         m = _CITE_ITEM.fullmatch(part)
         if not m:
             return None
-        items.append({"key": m["bkey"] or m["key"], "prefix": _squash(m["prefix"]), "locator": _squash(m["locator"])})
+        items.append({"key": text(m["bkey"]) or m["key"], "prefix": _squash(text(m["prefix"])),
+                      "locator": _squash(text(m["locator"]))})
     return items
 
 
@@ -85,12 +116,32 @@ def _span_follows(src, pos, end):
     return True
 
 
+def _bracket_end(state, start):
+    """Where the `]` that closes the bracket at `start` is, or -1: one in math (`[$x]@y$]{.idx}`) or after a
+    backslash doesn't close it, as in Pandoc."""
+    src, pos, was = state.src, start + 1, state.pos
+    try:
+        while pos < state.posMax:
+            c = src[pos]
+            if c == "]":
+                return pos
+            if c == "$":
+                state.pos = pos
+                if _math_rule(state, True):
+                    pos = state.pos
+                    continue
+            pos += 2 if c == "\\" else 1
+        return -1
+    finally:
+        state.pos = was
+
+
 def _cite_rule(state, silent):
     """`[@key]`, `[see @key, p. 12]`, `[@a; @b, pp. 3–5]`; runs before links and spans."""
     src, start = state.src, state.pos
     if src[start] != "[":
         return False
-    end = src.find("]", start + 1, state.posMax)
+    end = _bracket_end(state, start)
     if end < 0:
         return False
     body = src[start + 1:end]
@@ -136,6 +187,67 @@ def _image_attrs_rule(state, silent):
     return True
 
 
+def _text_group_end(src, pos, stop):
+    """Where a `\\text{…}` group at `pos` ends (just after its closing brace), or None: not one, or its braces don't
+    close before `stop`. In inline math Pandoc reads such a group as it is, `$` and all (`\\text{if $y>0$}`); inside
+    it a backslash and the character after it count as one."""
+    if not src.startswith("\\text{", pos):
+        return None
+    depth, i = 0, pos + 5
+    while i < stop:
+        c = src[i]
+        if c == "\\":
+            i += 2
+            continue
+        depth += {"{": 1, "}": -1}.get(c, 0)
+        i += 1
+        if not depth:
+            return i
+    return None
+
+
+_MATH_BLOCK = math_block_dollar(allow_labels=False, allow_blank_lines=False)
+
+
+def _math_block_rule(state, start, end, silent):
+    """dollarmath's `$$` block rule (no labels, no blank lines). It pushes its token even when only asked whether a
+    block starts here (silently, by a paragraph or list that checks whether it ends there): asked so, it runs on a
+    token list that is thrown away."""
+    if not silent:
+        return _MATH_BLOCK(state, start, end, False)
+    tokens, line = state.tokens, state.line
+    state.tokens = []
+    try:
+        return _MATH_BLOCK(state, start, end, True)
+    finally:
+        state.tokens, state.line = tokens, line
+
+
+def _math_rule(state, silent):
+    """`$tex$` as Pandoc's `tex_math_dollars` reads it: the opening `$` has a non-space right after it, the closing one
+    a non-space right before it and no digit right after it (`$20 en $30` is text); a backslash and the character
+    after it are TeX (`\\$` doesn't close), and so is a `\\text{…}` group (`$a \\text{if $b$} c$`). It takes the place
+    of dollarmath's inline rule, which also refuses a digit before the opening `$` (Pandoc reads `2$\\pi$` as math)
+    and takes a `$` that starts a line for escaped when the line ends in a backslash (it reads `src[-1]`)."""
+    src, start, stop = state.src, state.pos, state.posMax
+    if src[start] != "$" or start + 1 >= stop or src[start + 1] == "$" or isWhiteSpace(ord(src[start + 1])):
+        return False
+    pos = start + 1
+    while pos < stop and src[pos] != "$":
+        if src[pos] == "\\":
+            end = _text_group_end(src, pos, stop)
+            pos = pos + 2 if end is None else end
+        else:
+            pos += 1
+    if pos >= stop or isWhiteSpace(ord(src[pos - 1])) or (pos + 1 < stop and src[pos + 1] in "0123456789"):
+        return False
+    if not silent:
+        token = state.push("math_inline", "math", 0)
+        token.content, token.markup = src[start + 1:pos], "$"
+    state.pos = pos + 1
+    return True
+
+
 class _Markdown(MarkdownIt):
     """Image paths are kept exactly as written: nothing here is rendered as HTML."""
 
@@ -154,6 +266,17 @@ def _markdown(block_off=(), block_only=None):
     md.core.ruler.disable("footnote_tail")  # definitions stay in place: unused ones are kept as text
     md.use(attrs_plugin, spans=True, after=())
     md.use(colon_fence_plugin)
+    md.enable("strikethrough")              # `~~text~~`
+    md.enable("table")                      # pipe tables (GFM's rule reads Pandoc's pipe tables); not in poems
+    # `$$` display blocks: no labels, no blank lines in them (Pandoc ends display math there), and `$$…$$` inside a
+    # line isn't display math; one may interrupt a paragraph (text, display math, text: dollarmath registers its rule
+    # without that); `block_only` (inside `::: poem`) leaves the block rule out. Inline `$tex$` is read by
+    # `_math_rule`, in place of the plugin's own.
+    md.use(dollarmath_plugin, allow_labels=False, allow_blank_lines=False, double_inline=False)
+    md.block.ruler.at("math_block", _math_block_rule, {"alt": ["paragraph", "reference", "blockquote", "list"]})
+    md.inline.ruler.at("math_inline", _math_rule)
+    # lists with letters and roman numerals too; under the same name, so `block_off`/`block_only` still reach it
+    md.block.ruler.at("list", list_rule, {"alt": ["paragraph", "reference", "blockquote"]})
     md.inline.ruler.before("link", "cite", _cite_rule)
     md.inline.ruler.after("image", "image_attrs", _image_attrs_rule)
     if block_only:
@@ -164,8 +287,8 @@ def _markdown(block_off=(), block_only=None):
 
 _MD = _markdown()
 # A piece whose form is poem keeps the dialect's blocks (`# ` title, `##` heading, `> ` quotation, scene break,
-# `:::` blocks); Markdown outside the dialect (lists, underlined headings) stays lines of the poem.
-_POEM_MD = _markdown(block_off=("lheading", "list"))
+# `:::` blocks); Markdown outside the dialect (lists, tables, underlined headings) stays lines of the poem.
+_POEM_MD = _markdown(block_off=("lheading", "list", "table"))
 # Inside `::: poem`: only lines and stanzas.
 _LINES_MD = _markdown(block_only=("paragraph", "footnote_def"))
 
@@ -221,33 +344,53 @@ def _span_marks(attrs):
         marks.append({"type": "comment", "attrs": {"note": _unescape(attrs.get("note", ""))}})
     if "smallcaps" in classes:
         marks.append({"type": "smallcaps"})
+    if "underline" in classes:
+        marks.append({"type": "underline"})
+    size = next((c for c in classes if c in SIZES), None)      # one size per text: the first
+    if size:
+        marks.append({"type": "size", "attrs": {"size": size}})
     if attrs.get("lang"):
         marks.append({"type": "lang", "attrs": {"lang": _unescape(attrs["lang"])}})
     return marks
 
 
 def _alt(children):
-    return "".join(t.content if t.type in ("text", "text_special") else " " if t.type == "softbreak" else ""
-                   for t in children or [])
+    """An image's caption is text: math in it stays its source."""
+    return "".join(t.content if t.type in ("text", "text_special") else " " if t.type == "softbreak"
+                   else "$" + _one_line(t.content) + "$" if t.type == "math_inline" else "" for t in children or [])
 
 
-def _trim(run):
-    """Drop spaces, tabs and line breaks at both ends (paragraph text around an image)."""
-    def loose(n):
-        return n["type"] == "hard_break" or (n["type"] == "text" and not n["text"].strip(" \t"))
+def _one_line(tex):
+    """Inline TeX is one line: a line break (and the spaces around it) is a space, as Pandoc reads it."""
+    return re.sub(r"\s*[\r\n]\s*", " ", str(tex or ""))
+
+
+def _display_lines(tex):
+    """Display TeX as its block holds it: no blank lines (Pandoc can't hold them), no spaces at line ends, no
+    indentation all its lines share (a list item's, read by hand), nothing around it."""
+    lines = [line.rstrip() for line in str(tex or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    return textwrap.dedent("\n".join(line for line in lines if line.strip())).strip()
+
+
+def _trim(run, end=" \t"):
+    """Drop spaces, tabs and line breaks at both ends (paragraph text around an image). `end=None`: any whitespace at
+    the end, as Markdown drops it at a paragraph's end (a table row made a paragraph)."""
+    def loose(n, spaces=" \t"):
+        return n["type"] == "hard_break" or (n["type"] == "text" and not n["text"].strip(spaces))
     while run and loose(run[0]):
         run.pop(0)
-    while run and loose(run[-1]):
+    while run and loose(run[-1], end):
         run.pop()
     if run and run[0]["type"] == "text":
         run[0]["text"] = run[0]["text"].lstrip(" \t")
     if run and run[-1]["type"] == "text":
-        run[-1]["text"] = run[-1]["text"].rstrip(" \t")
+        run[-1]["text"] = run[-1]["text"].rstrip(end)
     return run
 
 
 def _paragraphs(nodes):
-    """Flatten blocks into paragraphs (inside quotations, epigraphs, poems and notes)."""
+    """Flatten blocks into paragraphs (inside quotations, epigraphs, poems and notes; alignment is lost there). A
+    table is a paragraph per row that has text, its cells joined by ` | `; display math is inline math."""
     out = []
     for n in nodes:
         t, content = n["type"], n.get("content", [])
@@ -262,22 +405,40 @@ def _paragraphs(nodes):
                 content = lead
             if content:
                 out.append(_node("paragraph", content))
-        elif t in ("blockquote", "epigraph", "poem"):
+        elif t == "list_item":
+            out.append(_with_marker(n))
+        elif t == "table":
+            for r in content:
+                cells = [c.get("content") or [] for c in r.get("content") or []]
+                if not any(cells):
+                    continue
+                line = []
+                for k, cell in enumerate(cells):
+                    if k:
+                        _add_text(line, " | ", [])
+                    for c in cell:
+                        _append(line, c)
+                out.append(_node("paragraph", _trim(line, None)))   # no space at its ends (an empty edge cell)
+        elif t in ("blockquote", "epigraph", "poem", "aligned"):
             out.extend(_paragraphs(content))
+        elif t == "math_display":           # inline math in a paragraph of its own, as inline math is written
+            tex = _inline_tex(n["attrs"]["tex"])
+            if tex:
+                out.append(_node("paragraph", [_node("math", attrs={"tex": tex})]))
         elif t == "image" and n["attrs"]["alt"]:
             out.append(_node("paragraph", [{"type": "text", "text": n["attrs"]["alt"]}]))
     return out
 
 
-def _with_marker(nodes, marker):
-    """A list item becomes paragraphs; its marker (`-`, `1.`) stays as text."""
-    if nodes and nodes[0]["type"] == "paragraph":
-        content = []
-        _add_text(content, marker + " ", [])
-        for c in nodes[0].get("content", []):
-            _append(content, c)
-        return [_node("paragraph", content)] + nodes[1:]
-    return [_node("paragraph", [{"type": "text", "text": marker}])] + nodes
+def _with_marker(item):
+    """A list item where lists can't be becomes a paragraph; its marker (`-`, `1.`, `c.`) stays as text."""
+    style = item["attrs"]["list"]
+    marker = "-" if style == "bullet" else md_marker(style, item.get("_n", 1)).strip()
+    content = []
+    _add_text(content, marker + (" " if item.get("content") else ""), [])
+    for c in item.get("content", []):
+        _append(content, c)
+    return _node("paragraph", content)
 
 
 def _attribution(paragraph):
@@ -302,6 +463,21 @@ def _fence_info(info):
 # ---------------------------------------------------------------------------------------------------------
 # Markdown -> document
 
+_DELIMITED = {"em_open": "em", "strong_open": "strong", "s_open": "strike"}
+_CELL_ALIGN = {"text-align:" + a: a for a in COLUMN_ALIGNS}     # the style markdown-it gives th and td
+
+
+def _join_aligned(blocks):
+    """Neighbouring aligned blocks with the same alignment are one block, as the writer writes them."""
+    out = []
+    for n in blocks:
+        if n["type"] == "aligned" and out and out[-1]["type"] == "aligned" and out[-1]["attrs"] == n["attrs"]:
+            out[-1] = dict(out[-1], content=out[-1]["content"] + n["content"])
+        else:
+            out.append(n)
+    return out
+
+
 class _Reader:
     """Turns markdown-it tokens into document nodes. `md` is the parser for the piece's form; outside prose
     (`lines`) every line break is kept."""
@@ -314,6 +490,8 @@ class _Reader:
         self.used = set()
         self.expanding = set()
         self.in_note = False
+        self.in_cell = False    # reading a table cell's text (its `\|` came in without the backslash)
+        self.level = 0          # how deep the list being read is
 
     def read(self, text, md=None):
         """Blocks of `text`, read with `md` (default: the piece's parser), e.g. `_LINES_MD` in a poem."""
@@ -368,13 +546,18 @@ class _Reader:
                 if paragraphs:
                     out.append(_node("blockquote", paragraphs))
             elif t in ("bullet_list_open", "ordered_list_open"):
-                inner, i = self._blocks(tokens, i + 1, t[:-5] + "_close")
-                out.extend(inner)
-            elif t == "list_item_open":
-                inner, i = self._blocks(tokens, i + 1, "list_item_close")
-                out.extend(_with_marker(inner, (tok.info or "") + tok.markup))
+                items, i = self._list(tokens, i)
+                out.extend(items)
+            elif t == "table_open":
+                table, i = self._table(tokens, i)
+                out.append(table)
             elif t == "hr":
                 out.append(_node("scene_break"))
+                i += 1
+            elif t == "math_block":
+                tex = _display_lines(tok.content)
+                if tex:
+                    out.append(_node("math_display", attrs={"tex": tex}))
                 i += 1
             elif t == "colon_fence":
                 out.extend(self._fence(tok))
@@ -386,6 +569,48 @@ class _Reader:
             else:
                 i += 1
         return out, i
+
+    def _list(self, tokens, i):
+        """A Markdown list -> flat list items, a nested list one level deeper. An item is its first paragraph; its
+        other blocks (a second paragraph, a quotation, an image) follow it. Each item carries `_n`, its number in the
+        Markdown list, until `normalize`."""
+        style, n = tokens[i].meta["list"], tokens[i].meta["start"]
+        close, out, i = tokens[i].type[:-5] + "_close", [], i + 1
+        while tokens[i].type != close:          # list_item_open
+            self.level += 1
+            inner, i = self._blocks(tokens, i + 1, "list_item_close")
+            self.level -= 1
+            lead = inner.pop(0) if inner and inner[0]["type"] == "paragraph" else {}
+            item = _node("list_item", lead.get("content"), {"list": style, "level": self.level, "start": None})
+            item["_n"] = n
+            out += [item] + inner
+            n += 1
+        return out, i + 1
+
+    def _table(self, tokens, i):
+        """A pipe table -> table › table_row › table_cell, a cell's text read as one line (an image is its caption).
+        Each column's alignment is its header cell's; markdown-it has cut long rows and filled short ones. A header row
+        of empty cells is how a table without a header is written (Pandoc reads it so), unless the table has no text at
+        all: a table just put in, nothing typed yet, keeps its header and every row. In a cell a pipe can only be
+        written `\\|`, and markdown-it drops that backslash: a pipe in a cell's math was TeX's `\\|`, read as `\\Vert`."""
+        rows, align = [], []
+        while tokens[i].type != "table_close":
+            tok = tokens[i]
+            if tok.type == "tr_open":
+                rows.append([])
+            elif tok.type in ("th_open", "td_open"):
+                if tok.type == "th_open":
+                    align.append(_CELL_ALIGN.get(tok.attrs.get("style")))
+                self.in_cell = True
+                try:
+                    rows[-1].append(_node("table_cell", self._inline(tokens[i + 1].children or [], heading=True)))
+                finally:
+                    self.in_cell = False
+                i += 2
+            i += 1
+        header = any(c.get("content") for c in rows[0]) or not any(c.get("content") for r in rows for c in r)
+        rows = [_node("table_row", r) for r in (rows if header else rows[1:])]
+        return _node("table", rows, {"header": header, "align": align}), i + 1
 
     def _fence(self, tok):
         name, attrs = _fence_info(tok.info)
@@ -401,6 +626,17 @@ class _Reader:
             if last.get("type") == "text" and last["text"].startswith("—"):
                 paragraphs[-1] = _attribution(paragraphs[-1])
             return [_node("epigraph", paragraphs)]
+        if name in ALIGNS:
+            # its paragraphs (in a poem piece, stanzas) are aligned; any other block comes out between them, unaligned
+            out = []
+            for n in self.read(tok.content):
+                if n["type"] != "paragraph":
+                    out.append(n)
+                elif out and out[-1]["type"] == "aligned" and out[-1]["attrs"]["align"] == name:
+                    out[-1]["content"].append(n)
+                else:
+                    out.append(_node("aligned", [n], {"align": name}))
+            return out
         return self.read(tok.content)     # an unknown block: keep its text
 
     def _paragraph(self, children):
@@ -431,10 +667,10 @@ class _Reader:
                     _add_text(out, " ", marks)
                 else:
                     out.append(_node("hard_break", marks=marks))
-            elif t in ("em_open", "strong_open", "span_open"):
-                stack.append(_span_marks(tok.attrs) if t == "span_open" else [{"type": t[:-5]}])
+            elif t in ("em_open", "strong_open", "s_open", "span_open"):
+                stack.append(_span_marks(tok.attrs) if t == "span_open" else [{"type": _DELIMITED[t]}])
                 marks = _merge(stack)
-            elif t in ("em_close", "strong_close", "span_close"):
+            elif t in ("em_close", "strong_close", "s_close", "span_close"):
                 stack.pop()
                 marks = _merge(stack)
             elif t == "footnote_ref":
@@ -446,6 +682,9 @@ class _Reader:
                     out.append(_node("note", content, marks=marks))
             elif t == "cite":
                 out.append(_node("cite", attrs={"items": tok.meta["items"]}, marks=marks))
+            elif t == "math_inline":
+                tex = _one_line(tok.content)
+                out.append(_node("math", attrs={"tex": _no_pipes(tex, "\\Vert") if self.in_cell else tex}, marks=marks))
             elif t == "image":
                 alt = _alt(tok.children)
                 if heading or self.in_note:
@@ -458,7 +697,7 @@ class _Reader:
         return out
 
     def _note(self, tok):
-        was, self.in_note = self.in_note, True
+        was, cell, self.in_note = self.in_note, self.in_cell, True
         try:
             label = tok.meta.get("label")
             if label is None:                       # ^[inline note]
@@ -467,6 +706,7 @@ class _Reader:
             if label in self.expanding:
                 return []
             self.expanding.add(label)
+            self.in_cell = False                    # the definition's text isn't a cell's
             try:
                 blocks = self._blocks(self.defs.get(label, []), 0)[0]
             finally:
@@ -479,7 +719,7 @@ class _Reader:
                     _append(content, n)
             return content
         finally:
-            self.in_note = was
+            self.in_note, self.in_cell = was, cell
 
 
 def _clean(md):
@@ -498,19 +738,24 @@ def parse(md: str, form: str = "prose") -> dict:
                 nodes[0] = _node("title", n.get("content"))     # the piece title is the first line
             else:
                 n["attrs"]["level"] = 2
-    return _node("doc", nodes, {"form": form})
+    return _node("doc", normalize(_join_aligned(nodes)), {"form": form})
 
 
 # ---------------------------------------------------------------------------------------------------------
 # Document -> Markdown
 
-_ESCAPES = str.maketrans({c: "\\" + c for c in "\\*_[]`^"})     # `^` too: `^[` opens a note
+# `^[` opens a note; `~~` strikes; `|` ends a cell; `$` opens math
+_ESCAPES = str.maketrans({c: "\\" + c for c in "\\*_[]`^~|$"})
 _ENTITY = re.compile(r"&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]{1,31};)")
 _NUMBERED = re.compile(r"\d{1,9}(?=[.)])")
 _HEADING_END = re.compile(r"(^|[ \t])(#+)$")
+# A line that is only `:-`, `:--:` …: under a line with a `|` in it (escaped or not) it is a table's delimiter row.
+# (`-` and `|` at a line start are escaped anyway, so this is the only one-column delimiter row text can make.)
+_DELIMITER_ROW = re.compile(r":-+:?[ \t]*")
+_COLUMN_MD = {"left": ":--", "center": ":-:", "right": "--:"}   # a column without alignment: `---`
 _BARE_LANG = re.compile(r"[A-Za-z0-9-]+")
 _BARE_WIDTH = re.compile(r"[\w.%-]+")
-_ORDER = {"span": 0, "strong": 1, "em": 2}          # which delimiter goes outside when runs are equally long
+_ORDER = {"span": 0, "strong": 1, "em": 2, "strike": 3}     # which delimiter goes outside when runs are equally long
 
 
 def _esc(s):
@@ -522,22 +767,24 @@ def _esc_line_start(s):
     m = _NUMBERED.match(s)
     if m:
         return s[:m.end()] + "\\" + s[m.end():]
-    if s[:1] in ("#", ">", "-", "+", "=") or s.startswith(":::"):
+    if s[:1] in ("#", ">", "-", "+", "=") or s.startswith(":::") or _DELIMITER_ROW.fullmatch(s):
         return "\\" + s
-    return s
+    return escape_line_start(s)
 
 
 def _quote(value):
+    """An attribute value in quotes. `|` is escaped too: in a table cell it would end the cell."""
     value = re.sub(r"[\r\n\t]", " ", str(value))
-    return '"' + re.sub(r'([\\"{}])', r"\\\1", value) + '"'
+    return '"' + re.sub(r'([\\"{}|])', r"\\\1", value) + '"'
 
 
 def _fmt(marks):
-    """Marks -> {("em",), ("strong",), ("span", ((name, value), ...))}: all span marks of a node make one span."""
+    """Marks -> {("em",), ("strong",), ("strike",), ("span", ((name, value), ...))}: all span marks of a node make one
+    span."""
     out, span = set(), {}
     for mark in marks:
         t, attrs = mark.get("type"), mark.get("attrs") or {}
-        if t in ("em", "strong"):
+        if t in _RUNS:
             out.add((t,))
         elif t == "idx":
             span["idx"] = attrs.get("term")
@@ -545,6 +792,11 @@ def _fmt(marks):
             span["comment"] = attrs.get("note") or ""
         elif t == "smallcaps":
             span["smallcaps"] = True
+        elif t == "underline":
+            span["underline"] = True
+        elif t == "size":
+            if attrs.get("size") in SIZES:          # a size the dialect doesn't have is normal text
+                span["size"] = attrs["size"]
         elif t == "lang":
             if attrs.get("lang"):
                 span["lang"] = attrs["lang"]
@@ -557,7 +809,9 @@ def _fmt(marks):
 
 def _span_attrs(key):
     d = dict(key)
-    parts = ["." + k for k in ("idx", "comment", "smallcaps") if k in d]
+    parts = ["." + k for k in ("idx", "comment", "smallcaps", "underline") if k in d]
+    if "size" in d:
+        parts.append("." + d["size"])
     if d.get("idx") is not None:
         parts.append("term=" + _quote(d["idx"]))
     if d.get("comment"):
@@ -568,7 +822,7 @@ def _span_attrs(key):
 
 
 def _open(mark):
-    return {"span": "[", "em": "*", "strong": "**"}[mark[0]]
+    return {"span": "[", "em": "*", "strong": "**", "strike": "~~"}[mark[0]]
 
 
 def _close(mark):
@@ -576,17 +830,90 @@ def _close(mark):
 
 
 def _cite_md(items):
-    def clean(s, drop):
-        return re.sub("[" + re.escape(drop) + "]", "", _squash(s))
+    def clean(s, drop):         # squashed after dropping, so no space is left where a dropped character was
+        return _squash(re.sub("[" + re.escape(drop) + "]", "", str(s or "")))
+
+    def esc(s):                 # `|` would end a table cell, `$` open math; `\\` so that `\|` in the text stays itself
+        return re.sub(r"([\\|$])", r"\\\1", s)
     parts = []
     for item in items:
         key = clean(item.get("key"), "[];{}")
         if not key:
             continue
-        prefix, locator = clean(item.get("prefix"), "[];@"), clean(item.get("locator"), "[];")
-        key = "@" + (key if _KEY_RE.fullmatch(key) else "{" + key + "}")
+        prefix, locator = esc(clean(item.get("prefix"), "[];@")), esc(clean(item.get("locator"), "[];"))
+        key = "@" + (key if _KEY_RE.fullmatch(key) else "{" + esc(key) + "}")
         parts.append((prefix + " " if prefix else "") + key + (", " + locator if locator else ""))
     return "[" + "; ".join(parts) + "]" if parts else ""
+
+
+_BARE_DOLLAR = re.compile(r"(?<!\\)((?:\\\\)*)\$")       # a `$` after an even number of backslashes (none too)
+_TEX_PIPE = re.compile(r"\\.|\|", re.S)                  # a backslash with what it escapes, or a pipe
+
+
+def _display_dollars(tex):
+    """Display math ends at `$$`: a bare `$` next to another `$` is `\\$` (TeX's own literal dollar), so no `$$` is
+    left inside; a single `$` stays (`\\text{if $y>0$}`)."""
+    def sub(m):
+        at = m.end() - 1
+        return m[1] + "\\$" if "$" in (tex[at - 1:at], tex[at + 1:at + 2]) else m[0]
+    return _BARE_DOLLAR.sub(sub, tex)
+
+
+def _inline_dollars(tex):
+    """Inline math ends at a bare `$`: one is `\\$`, except in a `\\text{…}` group, which is read as it is
+    (`_text_group_end`). The `{` of a `\\text{` that doesn't close in the TeX is set apart (`\\text {`, the same in TeX),
+    so that no brace after the math can close it."""
+    out, i = [], 0
+    while i < len(tex):
+        if tex[i] == "\\":
+            end = _text_group_end(tex, i, len(tex))
+            if end is None and tex.startswith("\\text{", i):
+                out.append("\\text ")
+                i += 5
+                continue
+            end = end or i + 2
+            out.append(tex[i:end])
+            i = end
+        else:
+            out.append("\\$" if tex[i] == "$" else tex[i])
+            i += 1
+    return "".join(out)
+
+
+def _inline_tex(tex):
+    """Inline TeX as `$…$` holds it: one line; no space at its ends (Pandoc needs a non-space next to each dollar),
+    no lone backslash at its end (it would escape the closing dollar: dropped, it meant nothing there); `$` as `\\$`
+    (`_inline_dollars`). "" when nothing is left: the math isn't written."""
+    tex = _one_line(tex).strip()
+    while (len(tex) - len(tex.rstrip("\\"))) % 2:
+        tex = tex[:-1].rstrip()
+    return _inline_dollars(tex)
+
+
+def _no_pipes(tex, bare="\\vert"):
+    """TeX without pipes, for a table cell, where a pipe would end the cell: `\\|` is `\\Vert` and `|` is `\\vert` (the
+    same symbols), or `bare` (a cell's `|` as read, which was written `\\|`)."""
+    tex = str(tex or "")
+
+    def sub(m):
+        if m[0] not in ("|", "\\|"):
+            return m[0]
+        nxt = tex[m.end():m.end() + 1]
+        return (bare if m[0] == "|" else "\\Vert") + (" " if nxt.isalpha() or nxt == "@" else "")
+    return _TEX_PIPE.sub(sub, tex)
+
+
+def _cell_math(nodes):
+    """A cell's inline nodes with the math in them (in its notes too) written without pipes."""
+    out = []
+    for n in nodes:
+        if n.get("type") == "math":
+            attrs = n.get("attrs") or {}
+            n = dict(n, attrs=dict(attrs, tex=_no_pipes(attrs.get("tex"))))
+        elif n.get("type") == "note":
+            n = dict(n, content=_cell_math(n.get("content") or []))
+        out.append(n)
+    return out
 
 
 def _cls(c):
@@ -598,7 +925,7 @@ def _cls(c):
 
 
 def _class_runs(text):
-    """`„ja”,` -> `„`, `ja`, `”,`: the pieces an em/strong run can be trimmed by."""
+    """`„ja”,` -> `„`, `ja`, `”,`: the pieces an em/strong/strike run can be trimmed by."""
     classes = [_cls(c) for c in text]
     parts, start = [], 0
     for k in range(1, len(text) + 1):
@@ -608,17 +935,19 @@ def _class_runs(text):
     return parts
 
 
-def _items(nodes, heading, edges, single_breaks):
-    """Inline nodes -> (kind, value, marks), kind text, br, note or cite. Italic and bold text is split into
-    runs of letters, punctuation and spaces, so a run's edges can be trimmed (see `_layout`).
+def _items(nodes, heading, edges, single_breaks, end_spaces=None):
+    """Inline nodes -> (kind, value, marks), kind text, br, note, cite or math (its TeX as written, `_inline_tex`;
+    empty math is left out). Italic, bold and struck text is split into runs of letters, punctuation and spaces, so
+    a run's edges can be trimmed (see `_layout`).
     `edges`: drop what Markdown drops at the edges of a block (line breaks; spaces at the start, any
-    whitespace at the end); `single_breaks`: no empty lines (in a poem's notes they would end the stanza)."""
+    whitespace at the end, or only `end_spaces`: a table cell keeps a no-break space at its end as an entity);
+    `single_breaks`: no empty lines (in a poem's notes they would end the stanza)."""
     items = []
     for n in nodes:
         t, fmt = n.get("type"), _fmt(n.get("marks") or [])
         if t == "text":
             text = re.sub(r"[\r\n]", " ", n.get("text") or "")
-            if text and (("em",) in fmt or ("strong",) in fmt):
+            if text and any((name,) in fmt for name in _RUNS):
                 items += [("text", part, fmt) for part in _class_runs(text)]
             elif text:
                 items.append(("text", text, fmt))
@@ -628,6 +957,10 @@ def _items(nodes, heading, edges, single_breaks):
             items.append(("note", n.get("content") or [], fmt))
         elif t == "cite":
             items.append(("cite", (n.get("attrs") or {}).get("items") or [], fmt))
+        elif t == "math":
+            tex = _inline_tex((n.get("attrs") or {}).get("tex"))
+            if tex:
+                items.append(("math", tex, fmt))
         else:
             raise ValueError(f"unknown inline node: {t!r}")
 
@@ -648,7 +981,7 @@ def _items(nodes, heading, edges, single_breaks):
     if edges:
         while items and (items[0][0] == "br" or blank(items[0])):
             items.pop(0)
-        while items and (items[-1][0] == "br" or blank(items[-1], None)):
+        while items and (items[-1][0] == "br" or blank(items[-1], end_spaces)):
             items.pop()
     return items
 
@@ -681,11 +1014,11 @@ def _stanzas(content):
 #   `x`, `…` in italics, `y`     -> `x…y`               nothing solid is left: the mark is dropped
 
 def _layout(items):
-    """Give each em/strong run an identity and decide where it starts and ends.
+    """Give each em/strong/strike run an identity and decide where it starts and ends.
 
     A run is cut where a span would straddle it, so a span lies strictly inside the run or the run inside
-    the span (`*a [b]{.idx} c*`, `[*a*]{.idx} *b*`). At its edges a run sheds spaces, line breaks, notes
-    and citations (the mark means nothing on them, and asterisks must touch text), and punctuation that
+    the span (`*a [b]{.idx} c*`, `[*a*]{.idx} *b*`). At its edges a run sheds spaces, line breaks, notes,
+    citations and math (the mark means nothing on them, and asterisks must touch text), and punctuation that
     sits next to a letter outside the run (in `x*(y)*z` neither asterisk works: it becomes `x(*y*)z`); a
     run left with nothing loses its mark. Returns the items with these marks and, per item, where each
     mark ends."""
@@ -710,7 +1043,7 @@ def _layout(items):
         kind, val, _ = items[k]
         if kind == "text":
             return _cls(val[-1] if last else val[0])
-        return "W" if kind == "br" else "P"        # a note or citation is written with brackets
+        return "W" if kind == "br" else "P"        # a note or citation is written with brackets, math with dollars
 
     def before(k):              # what an opening asterisk at item k would follow (other asterisks don't count)
         if k == 0:
@@ -739,7 +1072,7 @@ def _layout(items):
             marks[k].add((name, i))
             ends[k][(name, i)] = e
 
-    for name in ("em", "strong"):
+    for name in _RUNS:
         i = 0
         while i < n:
             j = i
@@ -752,9 +1085,9 @@ def _layout(items):
 
 
 def _close_into(out, mark, opened_at):
-    """Close a mark. Spaces, line breaks, notes and citations at the end of an em/strong run that has to
-    close early (another run crosses it) move outside, since asterisks must touch text: with `*a ` open
-    and `b` arriving without italics, `*`, `a ` becomes `*`, `a`, `*`, ` `."""
+    """Close a mark. Spaces, line breaks, notes, citations and math at the end of an em/strong/strike run that has
+    to close early (another run crosses it) move outside, since asterisks and tildes must touch text: with
+    `*a ` open and `b` arriving without italics, `*`, `a ` becomes `*`, `a`, `*`, ` `."""
     if mark[0] == "span":
         out.append(("mark", _close(mark)))
         return
@@ -768,7 +1101,7 @@ def _close_into(out, mark, opened_at):
             if core:
                 out.append(("text", core))
                 break
-        elif kind in ("br", "note", "cite"):
+        elif kind in ("br", "note", "cite", "math"):
             tail.insert(0, out.pop())
         else:
             break
@@ -780,7 +1113,8 @@ def _emit(items, ends, lines, start, heading):
     """Write laid-out items. Text is escaped a whole run at a time (between two marks), so splitting an item
     never hides `1.` or `&amp;` from the escapes. Worked example (prose, `start`): `1. ` + `nee`(em) + ` !`
     + citation + `{x}` gives `1\\. *nee* \\![@a]\\{x}`: the number's dot is escaped at the line start, the `!`
-    before a citation would make it an image, and `{` after one would make it a span."""
+    before a citation would make it an image, and `{` after one would make it a span. A digit right after math is an
+    entity (`$x$&#x35;`): after a digit the closing dollar would not close."""
     out, stack, buf = [], [], []    # out: (kind, markdown); stack: (mark, index of its opening); buf: raw text
     at_start, first_line = start, start
 
@@ -803,7 +1137,7 @@ def _emit(items, ends, lines, start, heading):
 
     for i, (kind, val, fmt) in enumerate(items):
         if kind != "text" or not val.strip():
-            # spaces, breaks, notes and citations don't open em/strong; they only stay inside an open run
+            # spaces, breaks, notes, citations and math don't open em/strong/strike; they only stay inside an open run
             opened = {m for m, _ in stack}
             fmt = frozenset(m for m in fmt if m[0] == "span" or m in opened)
         keep = 0
@@ -834,23 +1168,28 @@ def _emit(items, ends, lines, start, heading):
         elif kind == "note":
             out.append(("note", "^[" + _inline_md(val, lines and not heading, False, heading, note=True) + "]"))
             at_start = False
-        else:
+        elif kind == "cite":
             out.append(("cite", _cite_md(val)))
+            at_start = False
+        else:
+            out.append(("math", "$" + val + "$"))
             at_start = False
     flush()
     while stack:
         _close_into(out, *stack.pop())
-    for k in range(1, len(out)):            # after the moves above: what touches a citation
+    for k in range(1, len(out)):            # after the moves above: what touches a citation or math
         if out[k][0] == "cite" and out[k - 1][0] == "text" and out[k - 1][1].endswith("!"):
             out[k - 1] = ("text", out[k - 1][1][:-1] + "\\!")     # `![@a](x)` would be an image
         if out[k - 1][0] == "cite" and out[k][0] == "text" and out[k][1].startswith("{"):
             out[k] = ("text", "\\" + out[k][1])                   # `[@a]{.idx}` would be a span
+        if out[k - 1][0] == "math" and out[k][0] == "text" and out[k][1][:1] in tuple("0123456789"):
+            out[k] = ("text", f"&#x{ord(out[k][1][0]):X};" + out[k][1][1:])     # `$x$5` would be text
     return "".join(s for _, s in out)
 
 
 def _units(nodes_or_items, from_items):
-    """The visible text with its marks, one unit per non-space character (and per note or citation), to check
-    that Markdown reads back as meant; for items, also which em/strong runs cover each unit."""
+    """The visible text with its marks, one unit per non-space character (and per note, citation or math, with its
+    TeX), to check that Markdown reads back as meant; for items, also which em/strong/strike runs cover each unit."""
     units = []
     for entry in nodes_or_items:
         if from_items:
@@ -864,12 +1203,16 @@ def _units(nodes_or_items, from_items):
             units += [((c, kinds), runs) for c in val if not c.isspace()]
         elif kind in ("note", "cite", "image"):
             units.append(((kind, None), frozenset()))
+        elif kind == "math":
+            units.append((("math", val if from_items else (entry.get("attrs") or {}).get("tex")), frozenset()))
     return units
 
 
 def _misread(md, items, lines, heading, note):
-    """None when `md` reads back as `items` mean; otherwise the em/strong run to give up (the shortest one at
-    the first difference). Italic or bold Markdown can't write must never come back as printed asterisks."""
+    """None when `md` reads back as `items` mean; otherwise the em/strong/strike run to give up: the shortest one
+    at the first difference, and of equally short ones a strike first (`~~` can't share a delimiter run with `*`,
+    so without it the asterisks can often meet: `*b***c**`). Italic, bold or strikethrough Markdown can't write must
+    never come back as printed asterisks or tildes."""
     reader = _Reader(_MD)
     reader.lines, reader.in_note = lines, note
     tokens = _MD.parseInline(md, reader.env)
@@ -885,20 +1228,38 @@ def _misread(md, items, lines, heading, note):
         return None                         # nothing left to give up
     p = next((k for k, (u, _) in enumerate(meant) if k >= len(got) or got[k] != u), len(meant))
     near = set().union(*(meant[k][1] for k in (p - 1, p) if 0 <= k < len(meant))) or set(sizes)
-    return min(near, key=lambda r: (sizes[r], r))
+    return min(near, key=lambda r: (sizes[r], r[0] != "strike", r))
 
 
-def _inline_md(nodes, lines, start, heading=False, note=False):
-    """Inline nodes -> Markdown. `start`: the text begins a line; `lines`: a hard break is a plain newline.
-    Lays the marks out, writes them, and reads the result back: a run Markdown can't write is dropped and the
-    text written again (`x` + `…`(em) + `y` gives `x…y`)."""
-    items, ends = _layout(_items(nodes, heading, not note, lines))
+def _inline_md(nodes, lines, start, heading=False, note=False, cell=False):
+    """Inline nodes -> Markdown. `start`: the text begins a line; `lines`: a hard break is a plain newline;
+    `cell`: a table cell (see `_cell_edges`). Lays the marks out, writes them, and reads the result back: a run
+    Markdown can't write is dropped and the text written again (`x` + `…`(em) + `y` gives `x…y`)."""
+    items, ends = _layout(_items(nodes, heading, not note, lines, " \t" if cell else None))
     while True:
         md = _emit(items, ends, lines, start, heading)
         bad = _misread(md, items, lines, heading, note)
         if bad is None:
-            return md if note else md.rstrip()      # a block's trailing whitespace is gone in Markdown anyway
+            if note:
+                return md
+            return _cell_edges(md) if cell else md.rstrip()    # a block's trailing whitespace is gone anyway
         items = [(kind, val, fmt - {bad}) for kind, val, fmt in items]
+
+
+def _trimmed(c):
+    """markdown-it trims this from a table cell's ends (CommonMark's whitespace and the line separators)."""
+    return isWhiteSpace(ord(c)) or c in "\u2028\u2029"
+
+
+def _cell_edges(md):
+    """A cell's Markdown without spaces and tabs at its ends; any other space there that markdown-it would trim (a
+    no-break space, U+3000, U+202F …) is written as an entity, so it is kept, as at a block's start."""
+    md = md.strip(" \t\n\r\x0b\x0c")
+    if md and _trimmed(md[0]):
+        md = f"&#x{ord(md[0]):X};" + md[1:]
+    if md and _trimmed(md[-1]):
+        md = md[:-1] + f"&#x{ord(md[-1]):X};"
+    return md
 
 
 def _fenced(name, parts):
@@ -916,6 +1277,28 @@ def _image_md(attrs):
         width = str(width)
         out += "{width=" + (width if _BARE_WIDTH.fullmatch(width) else _quote(width)) + "}"
     return out
+
+
+def _table_md(attrs, rows):
+    """A table -> a pipe table: the header row (an empty one when the table has none), the delimiter row with each
+    column's alignment, the other rows. The table is as wide as `align` or its longest row, whichever is more, so no
+    cell is lost; short rows get empty cells. A cell is one line: its text as a heading's (a line break in a note is a
+    space), without spaces and tabs at its ends (`_cell_edges`), its math without pipes (`_cell_math`). A table without
+    rows or cells isn't written. A table with no text at all is written with its rows as they are, header or not: it
+    reads back with the header on and every row (`_table`), so an empty row put above them would come back as a row
+    more."""
+    cells = [[_inline_md(_cell_math(c.get("content") or []), False, False, heading=True, cell=True)
+              for c in r.get("content") or []] for r in rows]
+    align = list(attrs.get("align") or [])
+    width = max([len(align)] + [len(r) for r in cells])
+    if not cells or not any(cells):
+        return ""
+    if not attrs.get("header", True) and any(s for r in cells for s in r):
+        cells.insert(0, [])                 # Pandoc reads an empty first row as a table without a header
+    align += [None] * (width - len(align))
+    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in cells]
+    lines.insert(1, "| " + " | ".join(_COLUMN_MD.get(a, "---") for a in align) + " |")
+    return "\n".join(lines)
 
 
 def _block(node, lines):
@@ -947,15 +1330,75 @@ def _block(node, lines):
             out = _fenced("poem", [_block(c, True) for c in content])
     elif t == "image":
         out = _image_md(attrs)
+    elif t == "table":
+        out = _table_md(attrs, content)
+    elif t == "math_display":
+        tex = _display_dollars(_display_lines(attrs.get("tex")))
+        out = f"$$\n{tex}\n$$" if tex else ""       # no `$$` is left inside: no line ends in it but the closing one
+    elif t == "aligned":
+        parts = [_block(c, lines) for c in content]
+        if attrs.get("align") not in ALIGNS:
+            out = "\n\n".join(p for p in parts if p)        # "as the book": plain paragraphs
+        else:
+            out = _fenced(attrs["align"], parts) if any(parts) else ""     # one without text is dropped
     else:
         raise ValueError(f"unknown block: {t!r}")
     return "\n".join(line.rstrip(" \t") for line in out.split("\n"))
 
 
+def _list_md(items):
+    """Consecutive top-level list items -> one Markdown block. Each item is its marker and text; a nested item and the
+    lines after a line break are indented to the text of the item they belong to. A blank line comes before an item
+    that starts a list, except a nested list that can interrupt its parent's text (it starts at 1 and isn't empty)
+    and one under an empty item (there a blank line would end the empty item). A numbered list right after another
+    at its level (no shallower item between) takes the other delimiter, `.` then `)`, since a new delimiter is what
+    starts a new list in CommonMark and Pandoc: else `a. b. i.` would read as one lettered list."""
+    lines, columns, texts = [], [], []
+    runs = []       # per level, the open list: (style, delimiter)
+    found = markers(items)
+    for k, (item, m) in enumerate(zip(items, found)):
+        level, style = m["level"], m["list"]
+        del runs[level + 1:]
+        if m["first"]:
+            before = runs[level] if level < len(runs) else None
+            after_numbered = style != "bullet" and before is not None and before[0] != "bullet"
+            runs[level:] = [(style, ")" if after_numbered and before[1] == "." else ".")]
+        marker = md_marker(style, m["n"], runs[level][1])
+        indent = columns[level - 1] if level else 0
+        columns[level:] = [indent + len(marker)]
+        text = _inline_md(item.get("content") or [], False, True)
+        can_interrupt = m["n"] == 1 and bool(text)    # CommonMark: a list may interrupt text when it starts at 1
+        under_empty = level and found[k - 1]["level"] == level - 1 and not texts[k - 1]
+        if m["first"] and k and (level == 0 or not (can_interrupt or under_empty)):
+            lines.append("")
+        texts.append(text)
+        lines.append(" " * indent + marker + text.replace("\n", "\n" + " " * columns[level]))
+    return "\n".join(line.rstrip(" \t") for line in "\n".join(lines).split("\n"))
+
+
+def _together(node):
+    """What top-level blocks are written as one: a run of list items; neighbouring aligned blocks with the same
+    alignment (one fence). None: the block on its own."""
+    t = node.get("type")
+    if t == "list_item":
+        return ("list",)
+    return ("aligned", (node.get("attrs") or {}).get("align")) if t == "aligned" else None
+
+
 def serialize(doc: dict, form: str | None = None) -> str:
     """The editor's document -> canonical Markdown. `form` defaults to the document's own (`attrs.form`)."""
     form = form or (doc.get("attrs") or {}).get("form") or "prose"
-    blocks = [b for b in (_block(n, form == "poem") for n in doc.get("content") or []) if b]
+    blocks = []
+    for key, run in groupby(doc.get("content") or [], key=_together):
+        run = list(run)
+        if key == ("list",):
+            blocks.append(_list_md(run))
+        elif key is not None:
+            content = [c for n in run for c in n.get("content") or []]
+            blocks.append(_block({"type": "aligned", "attrs": {"align": key[1]}, "content": content}, form == "poem"))
+        else:
+            blocks += [_block(n, form == "poem") for n in run]
+    blocks = [b for b in blocks if b]
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
@@ -974,15 +1417,21 @@ def _text_of(nodes):
 
 def _block_text(node, out):
     t = node.get("type")
-    if t in ("blockquote", "epigraph", "poem"):
+    if t in ("blockquote", "epigraph", "poem", "aligned"):
         for c in node.get("content") or []:
             _block_text(c, out)
-    elif t in ("title", "heading", "paragraph", "attribution"):
+    elif t in ("title", "heading", "paragraph", "list_item", "attribution"):
         out.append(_text_of(node.get("content") or []))
+    elif t == "table":
+        for r in node.get("content") or []:
+            cells = [_text_of(c.get("content") or []) for c in r.get("content") or []]
+            if any(cells):
+                out.append(" | ".join(cells))
 
 
 def plain_text(doc: dict) -> str:
-    """The body text: blocks separated by a blank line; no notes, comment notes, citations or captions."""
+    """The body text: blocks separated by a blank line (a table's rows too, their cells joined by ` | `); no notes,
+    comment notes, citations or captions."""
     out = []
     for n in doc.get("content") or []:
         _block_text(n, out)

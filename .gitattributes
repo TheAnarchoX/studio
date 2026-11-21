@@ -7,3 +7,5 @@
 *.ttf binary
 studio/static/vendor/prosemirror.js text eol=lf
 tools/package-lock.json text eol=lf
+studio/static/vendor/hunspell.js text eol=lf
+studio/static/dictionaries/** text eol=lf

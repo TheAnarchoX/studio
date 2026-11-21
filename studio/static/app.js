@@ -169,6 +169,8 @@ function leaveTab() {
   flushNotes();
   if (typeof Editor !== "undefined") Editor.unmount();
   if (typeof BookEditor !== "undefined") BookEditor.unmount();      // the open piece is saved as it is left
+  if (typeof Board !== "undefined") Board.unmount();                /* part 3: the board's poll stops, its open item is saved */
+  if (typeof BookCompose !== "undefined") BookCompose.unmount();
   document.body.classList.remove("designing", "focus");
   if (window.speechSynthesis) speechSynthesis.cancel();
 }
@@ -182,8 +184,12 @@ function route() {
   if (h === "/books") return showBooks();
   if (h === "/books/import") return showBookImport();
   if ((m = h.match(/^\/book\/([^/]+)\/settings(?:\/(features|look|style))?$/))) return showBookSettings(decodeURIComponent(m[1]), m[2] || "details");
+  if ((m = h.match(/^\/book\/([^/]+)\/board$/))) return showBook(decodeURIComponent(m[1]), "board");      /* part 3: a book's board */
+  if (h === "/research") return showResearch();                                                         /* part 3: the shared board */
   if ((m = h.match(/^\/book\/([^/]+)(?:\/write\/([^/]+))?$/))) return showBook(decodeURIComponent(m[1]), "contents", m[2] ? decodeURIComponent(m[2]) : null);
+  if ((m = h.match(/^\/book\/([^/?]+)\/compose(?:\/(\d+))?(?:\?entry=(\d+))?$/))) return showBookCompose(decodeURIComponent(m[1]), {page: m[2] ? +m[2] : null, entry: m[3] != null ? +m[3] : null});
   if ((m = h.match(/^\/styles(?:\/(looks|palettes|fonts|rules))?$/))) return showStyles(m[1] || "looks");
+  if (h === "/writing") return showWritingLog();
   if (h === "/settings") return showSettings();
   if (h === "/info") return showInfo();
   if (h === "/poems") return showPoems();
@@ -205,6 +211,9 @@ addEventListener("hashchange", () => {
 addEventListener("beforeunload", e => {
   if (state.dirty || state.docDirty || artUnsaved() || (typeof Editor !== "undefined" && Editor.pending())
       || (typeof BookEditor !== "undefined" && BookEditor.pending())) { e.preventDefault(); e.returnValue = ""; }
+});
+addEventListener("beforeunload", e => {     /* part 3: the board's open item */
+  if (typeof Board !== "undefined" && Board.pending()) { e.preventDefault(); e.returnValue = ""; }
 });
 
 /* ——— shared pieces ——— */
@@ -242,8 +251,8 @@ async function loadHome() { const d = await api("/api/home"); state.home = d; re
 
 async function showPoems() {
   state.view = "poems"; setNav("poems"); document.title = "Poems — Studio";
-  try { const d = await loadHome(); state.stamp = d.stamp; renderPoems(); }
-  catch (e) { app.innerHTML = `<p class="empty">Couldn't read the poems: ${esc(e.message)}</p>`; }
+  try { const d = await loadHome(); if (state.view !== "poems") return; state.stamp = d.stamp; renderPoems(); }      // went elsewhere meanwhile
+  catch (e) { if (state.view === "poems") app.innerHTML = `<p class="empty">Couldn't read the poems: ${esc(e.message)}</p>`; }
 }
 
 function renderPoems() {
@@ -280,13 +289,15 @@ function renderGrid() {
 async function showSeriesIndex() {
   state.view = "seriesIndex"; setNav("poems"); document.title = "Series — Studio";
   try {
-    const d = await loadHome(); state.stamp = d.stamp;
+    const d = await loadHome();
+    if (state.view !== "seriesIndex") return;           // went elsewhere meanwhile
+    state.stamp = d.stamp;
     app.innerHTML = `<header class="pagehead"><div><p class="kicker">${plural(d.series.length, "series")}</p><h1 class="display">Series</h1>
         <p class="lede">A series is a body of work with its own look and rules: a palette, two typefaces, a way of turning poems into images.</p></div>
         <div class="actions"><button class="btn solid" data-newseries><span class="plus">+</span>New series</button></div></header>
       <div class="series-grid">${d.series.map(seriesCard).join("")}<button class="scard new" type="button" data-newseries><span class="plus">+</span>New series</button></div>`;
     $$("[data-newseries]").forEach(b => b.onclick = () => newSeriesDialog());
-  } catch (e) { app.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+  } catch (e) { if (state.view === "seriesIndex") app.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }
 
 async function showSeries(name, tab) {
@@ -1735,7 +1746,7 @@ async function poll() {
     const booksMoved = books != null && state.booksStamp != null && books !== state.booksStamp;
     if (books != null) state.booksStamp = books;
     if (state.view === "books" || state.view === "book") { if (booksMoved) await refreshBookView(); }
-    else if (state.view === "homepage" && booksMoved) { const d = await loadHome(); state.stamp = d.stamp; renderHomePage(); }
+    else if (state.view === "homepage" && booksMoved) { const d = await loadHome(); if (state.view === "homepage") { state.stamp = d.stamp; renderHomePage(); } }
     else if (stamp !== state.stamp) {
       if (state.view === "poem") applyFresh(await api("/api/poem?id=" + encodeURIComponent(state.poem.id)));
       else if (state.view === "series") {
@@ -1743,8 +1754,8 @@ async function poll() {
         const doc = $("#stab")?.syncDoc;      // the Rules or Concepts editor: keep what's being typed
         if (doc) doc(); else if (!document.activeElement?.isContentEditable) renderSeries();
       }
-      else if (state.view === "poems") { const d = await loadHome(); state.stamp = d.stamp; renderGrid(); }
-      else if (state.view === "homepage") { const d = await loadHome(); state.stamp = d.stamp; renderHomePage(); }
+      else if (state.view === "poems") { const d = await loadHome(); if (state.view === "poems") { state.stamp = d.stamp; renderGrid(); } }
+      else if (state.view === "homepage") { const d = await loadHome(); if (state.view === "homepage") { state.stamp = d.stamp; renderHomePage(); } }
       else state.stamp = stamp;
     }
   } catch {
@@ -1849,6 +1860,7 @@ async function showSettings() {
           <select class="select" id="s-look" style="max-width:320px">${(looks.some(l => l.name === s.default_look) ? looks : [...looks, {name: s.default_look}]).map(l => `<option ${l.name === s.default_look ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Examples</h2><p class="muted">A small series of example poems with designs, to try Studio with. Removing them moves them to the trash folder in Poems.</p></div>
         <div class="sb"><button type="button" class="btn" id="s-ex">${info.has_examples ? "Remove examples" : "Add examples"}</button></div></section>
+      ${(window.settingsSections || []).map(x => `<section class="set" data-setsec="${esc(x.id)}">${x.html(s, info)}</section>`).join("")}
       <section class="set"><div class="sh"><h2 class="h2">Updates</h2><p class="muted">Studio asks GitHub once a day whether a newer release exists. It sends nothing about you.</p></div>
         <div class="sb">
           <label class="switch"><input type="checkbox" id="s-upd" ${s.update_check ? "checked" : ""}><span>Check for updates</span></label>
@@ -1920,6 +1932,7 @@ async function showSettings() {
       toast("Settings saved");
     } catch (err) { toast(err.message, true); }
   };
+  for (const x of window.settingsSections || []) x.bind?.($(`[data-setsec="${x.id}"]`), s, info);
 }
 
 /* ——— info: everything about running Studio and connecting Claude, in the app ——— */
@@ -1931,7 +1944,11 @@ async function showInfo() {
   const code = (txt, id) => `<div class="code"><pre id="${id}">${esc(txt)}</pre><button class="btn small" data-copy="${id}">Copy</button></div>`;
   const tools = [["list_poems", "the poems and their status"], ["read_poem", "text, drafts, notes, brief, renders, QA"], ["get_rules", "a series' rules (README.md)"],
     ["list_concepts", "a series' visual concepts"], ["write_brief", "write BRIEF.md"], ["set_slides", "choose the carousel's slides"], ["render", "render the carousel with the series' kit"],
-    ["qa", "measure the renders: alignment, safe zones, phone size, the name"], ["get_design / save_design", "read and write designs in the Design tab"], ["render_design", "export a design"]];
+    ["qa", "measure the renders: alignment, safe zones, phone size, the name"], ["get_design / save_design", "read and write designs in the Design tab"], ["render_design", "export a design"],
+    ["list_books / read_book / read_piece", "your books, a book's outline and text, one piece"], ["search_book", "find words in a book"], ["list_sources / add_source", "the bibliography; add a source"],
+    ["suggest", "propose edits, notes, index terms, citations and comments for you to accept or reject"], ["list_suggestions / withdraw_suggestions", "what Claude has suggested; take suggestions back"],
+    ["get_book_design / set_book_design", "read and change a book's design"], ["render_pages / export_pdf / preflight", "look at pages, make the PDF, run the print checks"],
+    ["list_research / read_research / add_research", "read a research board; add notes, quotes, sources and links"]];
   app.innerHTML = `
     <header class="pagehead"><div><p class="kicker">Studio ${esc(a.version)} · Python ${esc(a.python)}</p><h1 class="display">Info</h1>
       ${updateFailed(upd)}${upd?.available ? `<p class="updline" id="i-upd">${updateLine(upd)} <span class="updrow">${updateActions(upd)}</span></p>` : ""}
@@ -1941,7 +1958,7 @@ async function showInfo() {
         <div class="sb">
           <span class="label">Claude Code (in a terminal)</span>${code(a.mcp.claude_code, "c1")}
           <span class="label">Claude Desktop (${esc(a.mcp.desktop_file)}) or a project's .mcp.json</span>${code(a.mcp.mcp_json, "c2")}
-          <p class="hint">Then ask Claude, for example: <b>“make the carousel for my new poem”</b> or <b>“draft a 9:16 design for it”</b>. You see the work appear here as it happens.</p>
+          <p class="hint">Then ask Claude, for example: <b>“make the carousel for my new poem”</b> or <b>“draft a 9:16 design for it”</b> or <b>“suggest index terms for chapter 2”</b>. You see the work appear here as it happens.</p>
           <span class="label" style="margin-top:22px">The tools</span>
           <dl class="tools">${tools.map(([n, d]) => `<dt><code>${n}</code></dt><dd>${d}</dd>`).join("")}</dl></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Your files</h2><p class="muted">No database: Studio, you and Claude read and write the same folders.</p></div>
@@ -1979,12 +1996,14 @@ Books/
         <div class="sb"><p>Set a look once for the library; a series and a poem inherit it and can <b>Detach</b> to their own or <b>Link</b> back. Fonts come from twelve bundled families, Google Fonts, your own files and the computer. Claude reads the house rules first.</p></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Books</h2><p class="muted">A writing window for whole books.</p></div>
         <div class="sb"><p>Create a book from <b>New book</b>; its kind sets whether it has notes, sources and an index, and you can change that in the book's settings. A book is a folder, <code>Books/&lt;Book&gt;/</code>, with one Markdown file per piece, so any editor can open it. Import a .docx or Markdown file from the Books page, freeze an edition from the book's settings, and export a .docx, Markdown or zip from the shelf; each export also leaves a dated copy in the book's <code>exports</code> folder.</p></div></section>
+      <section class="set"><div class="sh"><h2 class="h2">Keys</h2></div>
+        <div class="sb"><dl class="kv keys">${[["Ctrl+K", "search the library"]].map(([k, v]) => `<dt><kbd>${k}</kbd></dt><dd>${v}</dd>`).join("")}</dl></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Writing window keys</h2></div>
-        <div class="sb"><dl class="kv keys">${[["Ctrl+K", "command palette: jump to a piece or run an action"], ["Ctrl+Shift+F", "focus mode"], ["Ctrl+\\", "show or hide the list of pieces"],
-          ["Ctrl+F / Ctrl+H", "find / find and replace across the book"], ["Ctrl+S", "save now (it also saves after a pause)"], ["/", "insert menu: note, citation, scene break, epigraph, poem, image, page break"],
-          ["Ctrl+B / Ctrl+I", "bold / italic"], ["Ctrl+Alt+F / Ctrl+Alt+M", "note / comment on the selection"], ["Shift+Alt+X", "index term for the selection"],
-          ["Alt+Enter", "apply the fix for the style-sheet tip under the cursor"], ["Alt-click", "open a piece in a second pane"], ["Alt+Up / Alt+Down", "move the focused piece in the list of pieces"],
-          ["Esc", "leave focus mode, close the second pane, return from the rail to the text"], ["Right-click", "everything else"]].map(([k, v]) => `<dt><kbd>${k}</kbd></dt><dd>${v}</dd>`).join("")}</dl></div></section>
+        <div class="sb"><dl class="kv keys">${BOOK_KEYS.flatMap(([, rows]) => rows).map(([tool, k, v, words]) =>      // book.js: the Keys and tools sheet's list
+          `<dt>${k ? `<kbd>${esc(k)}</kbd>` : esc(words || "")}</dt><dd>${esc([].concat(tool).join(", "))}${v ? `: ${esc(v[0].toLowerCase() + v.slice(1))}` : ""}</dd>`).join("")}</dl></div></section>
+      ${/* part 3 */ ""}<section class="set"><div class="sh"><h2 class="h2">Research board keys</h2></div>
+        <div class="sb"><dl class="kv keys">${[["Ctrl+0 / Ctrl+1", "fit the board / 100%"], ["Space-drag", "pan"], ["Ctrl+wheel", "zoom"], ["Enter", "open the selected item"], ["Delete", "move the selection to the trash"],
+          ["Ctrl+Z / Ctrl+Shift+Z", "undo / redo"], ["Ctrl+\\", "show or hide the sidebar"], ["Right-click", "everything else"]].map(([k, v]) => `<dt><kbd>${k}</kbd></dt><dd>${v}</dd>`).join("")}</dl></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Updates</h2><p class="muted">Settings → Updates.</p></div>
         <div class="sb"><p>Studio checks for a newer release once a day. Source installs pull and reinstall; the Windows app downloads the release and swaps its files. Nothing about you is sent.</p></div></section>
       <section class="set"><div class="sh"><h2 class="h2">Design editor keys</h2></div>

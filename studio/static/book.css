@@ -38,8 +38,10 @@
 
 /* ——— a book ——— */
 .pagehead .bk-by{display:block;margin:14px 0 0}
-/* narrow windows: the five tabs scroll sideways instead of breaking their labels (1px of room keeps the underline whole) */
-@media (max-width:640px){.bk-tabs{overflow-x:auto;scrollbar-width:none;padding-bottom:1px;margin-bottom:31px}.bk-tabs a{flex:none;white-space:nowrap}}
+/* narrow windows: the seven tabs (about 711 px) scroll sideways instead of breaking their labels (1px of room keeps the
+   underline whole) */
+.bk-tabs a{white-space:nowrap}
+@media (max-width:780px){.bk-tabs{overflow-x:auto;scrollbar-width:none;padding-bottom:1px;margin-bottom:31px}.bk-tabs a{flex:none;white-space:nowrap}}
 .bk-dot{width:8px;height:8px;border:1px solid transparent}
 .bk-dot.idea{border-color:var(--fog)}
 .bk-dot.draft{background:var(--fog);border-color:var(--fog)}
@@ -70,6 +72,7 @@
 .bk-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .bk-fields .label{margin-bottom:8px;padding-top:3px}       /* level with the row's own label */
 @media (max-width:860px){.bk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:861px){.bk-fields.nur{grid-template-columns:repeat(5,minmax(0,1fr))}}      /* a Dutch book: NUR after the ISBN */
 .bk-end{margin-top:56px;border-top:1px solid var(--line-soft)}
 .bk-end .sl-row:first-child{padding-top:28px}
 .bk-end2{margin-top:0;border-top:0}      /* Exports and Trash share one rule */
@@ -78,6 +81,11 @@
 .bk-eds li{display:grid;grid-template-columns:110px minmax(0,1fr) auto;gap:16px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft)}
 .bk-ed-d{font:500 13px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
 .bk-ed-n{font:400 15px/1.4 var(--serif);overflow-wrap:anywhere}
+/* the spelling block (book.js): both rows' actions one width, so the two lists end on one line; a word and Add one height */
+.bk-spl .sl-acts{width:240px;flex-wrap:nowrap;align-items:stretch}
+.bk-spl .sl-acts .input{flex:1;min-width:0}
+@media (max-width:860px){.bk-spl .sl-acts{width:auto}}
+.bk-words li{grid-template-columns:minmax(0,1fr) auto}      /* the word list: a word and Remove */
 .bk-features .pick.kinds{max-width:1200px}
 .bk-features .switch,.bk-sheet .switch{min-height:22px}
 .bk-diff{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-soft)}
@@ -110,14 +118,16 @@
 .bw-tog{background:none;border:0;padding:0;font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog);cursor:pointer}
 .bw-tog:hover,.bw-tog[aria-pressed="true"]{color:var(--paper)}
 
+/* the book's views over the binder, Write · Compose · Settings: Compose's tabs (.bc-tabs, book-compose.css) in a strip
+   as tall as its bar, so they sit where Compose has them */
+.bw-tabs{height:48px;border-bottom:1px solid var(--line-soft)}
+
 /* the binder: the book's pieces in front matter, body and back matter */
 /* the head scrolls with the list (staying on top), so a window that shows scrollbars narrows both alike */
 .bb-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .bb-head{position:sticky;top:0;z-index:2;padding:22px 20px 18px;background:var(--room);border-bottom:1px solid var(--line-soft)}
 .bb-k{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .bb-k .kicker{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bb-set{text-decoration:none;flex:none}
-.bb-set:hover{color:var(--paper)}
 .bb-book{margin:12px 0 0;font:600 22px/1.15 var(--serif);letter-spacing:-.012em;overflow-wrap:break-word}
 .bb-total{margin:7px 0 0;font:500 12px/1 var(--sans);color:var(--fog);font-variant-numeric:tabular-nums}
 .bb-groups{padding:0 20px 28px}
@@ -135,6 +145,7 @@
 .bb-row.auto .bb-t{font-weight:400;color:var(--fog)}
 .bb-w{font:500 12px/1 var(--sans);color:var(--fog);text-align:right;font-variant-numeric:tabular-nums}
 .bb-row:not(.auto) .bb-a:hover .bb-t{color:var(--paper-hot)}
+.bb-row.auto .bb-a:hover .bb-t{color:var(--paper)}        /* a page made by Studio opens in Compose */
 /* the open piece: a highlight that bleeds into the binder's padding, with the red rule at its edge */
 .bb-row.cur::before{content:"";position:absolute;inset:0 -20px;z-index:-1;background:var(--panel);box-shadow:inset 2px 0 0 var(--red)}
 .bb-row.dragging{opacity:.4}

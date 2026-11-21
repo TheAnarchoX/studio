@@ -7,8 +7,9 @@
    with Reload and Keep mine, or reloads quietly when nothing here is unsaved. A save that fails stays on a quiet bar
    and is tried again, and until one goes through the text is also kept in this browser, so nothing typed is lost.
    A classic script after book.js and book-text.js; sets window.BookEditor:
-   mount(el, {book, file}), unmount() (saves the piece as a leaving save), pending(), refresh(book) (the poll), and for
-   the tools the window (win), Piece, bar and a few of the window's own actions. */
+   mount(el, {book, file}), unmount() (saves the piece as a leaving save), pending(), refresh(book) (the poll),
+   reveal(file, block) (a piece with a top-level block in view, from Compose), and for the tools the window (win),
+   Piece, bar and a few of the window's own actions. */
 
 const BookEditor = (() => {
   // the piece kinds, forms and auto pages are the store's (GET /api/books/kinds, read by book.js into bookLists)
@@ -16,6 +17,7 @@ const BookEditor = (() => {
   const SAVE_AFTER = 1500, RETRY = 5000, RELOAD = "bk-reload";
 
   let W = null;                     // the open window
+  let wanted = null;                // reveal(): {book, file, block} waiting for its piece to open
   const live = new Set();           // pieces with something not yet on disk (the open one, or one still saving after it closed)
   const places = new Map();         // book/file -> {anchor, head, scroll}: where the cursor was in a piece
 
@@ -184,8 +186,9 @@ const BookEditor = (() => {
       if (this.dirty || this.conflict) { if (!this.conflict) { this.conflict = {}; this.win.bar(this); } return; }
       this.reload(true);
     }
-    /* takes in the piece as it is on disk: quietly (nothing unsaved here), or after Reload */
-    async reload(quiet) {
+    /* takes in the piece as it is on disk: quietly (nothing unsaved here), or after Reload. keep: the text it replaces is
+       offered back (Put it back); not after an accepted suggestion, whose text before is in History */
+    async reload(quiet, {keep = !quiet} = {}) {
       let p;
       try { p = await this.fetch(); }
       catch (e) { toast(e.message, true); return; }
@@ -193,7 +196,7 @@ const BookEditor = (() => {
       if (quiet && (this.dirty || this.saving)) { if (p.mtime > this.mtime + 1e-6) { this.conflict = p; this.win.bar(this); } return; }
       Object.assign(this.win.linked, p.linked || {});
       // Reload: the text it replaces stays offered (Put it back), not only in the undo history, so leaving keeps it
-      const mine = quiet ? null : this.docJSON();
+      const mine = keep ? this.docJSON() : null;
       if (mine && solid(BookText.editableDoc(mine)) !== solid(BookText.editableDoc(p.doc))) {
         rescue.put(this.book, this.file, {id: `reload-${Date.now()}`, doc: mine, at: Date.now(), title: this.name});
       }
@@ -296,7 +299,7 @@ const BookEditor = (() => {
     look();
     renderBinder();
     wireBinder();
-    $(".bw-tog", root).onclick = toggleBinder;
+    $(".bw-status > .bw-tog", root).onclick = toggleBinder;
     loadSources();
     bar(null);
     tools("mount", W);
@@ -442,10 +445,11 @@ const BookEditor = (() => {
     if (!W) return;
     const w = W, old = w.piece, there = w.split?.piece;
     // open in the second pane, or being opened there: it is shown there (one piece, one editor)
-    if (BookTools.whereOpen(file, {split: there && !there.closed ? there.file : null, splitPending: w.split?.pending?.file}) === "split") { there?.text?.focus(); return; }
+    if (BookTools.whereOpen(file, {split: there && !there.closed ? there.file : null, splitPending: w.split?.pending?.file}) === "split") { there?.text?.focus(); if (there) showBlock(there); return; }
     if (old && old.file === file && old.text) {
       if (w.pending) { w.pending = null; markCurrent(file); state.bookFile = file; if (push) history.pushState(null, "", bookHash(w.book.id, file)); }
       old.text.focus();
+      showBlock(old);
       return;
     }
     const piece = new Piece(w, file);
@@ -478,9 +482,40 @@ const BookEditor = (() => {
       } catch { /* a place the text no longer has */ }
       w.hosts.scroll.scrollTop = selectTitle ? 0 : place?.scroll || 0;
       if (!$("#dlg").open) v.focus();
+      showBlock(piece);
     }
     status();
     tools("open", piece);
+  }
+
+  /* Opens a piece with its top-level block `block` in view and the cursor at its start (Compose: double-click a page,
+     Show in the text). From another view it goes to the writing window first; the block is shown once the piece is open. */
+  function reveal(file, block) {
+    const id = W?.book.id || state.book?.id;
+    if (!id || !file) return;
+    wanted = {book: id, file, block: Math.max(0, +block || 0)};
+    if (W && W.book.id === id && state.view === "book" && state.bookTab === "write") {
+      const open = [W.piece, W.split?.piece].find(p => p && p.file === file && p.text && !p.closed);
+      if (open && !W.pending) { open.text.focus(); showBlock(open); }
+      else openPiece(file);
+    } else location.hash = bookHash(id, file);
+  }
+  function showBlock(piece) {
+    const want = wanted;
+    if (!want || !piece.text) return;
+    wanted = null;                      // another piece opened first: the reveal is over, it never fires later
+    if (want.book !== piece.book || want.file !== piece.file) return;
+    const v = piece.text.view, doc = v.state.doc, k = Math.min(want.block, doc.childCount - 1);
+    let pos = 0;
+    for (let j = 0; j < k; j++) pos += doc.child(j).nodeSize;
+    const node = doc.child(k);          // an image is selected as itself; text, or a poem's first line, gets the cursor
+    try { v.dispatch(v.state.tr.setSelection(node.isAtom && PM.NodeSelection.isSelectable(node) ? PM.NodeSelection.create(doc, pos) : PM.Selection.near(doc.resolve(Math.min(pos + 1, doc.content.size))))); }
+    catch { /* a block the cursor can't go into: it is still scrolled to */ }
+    const dom = v.nodeDOM(pos), scroller = piece.text.view.dom.closest(".bw-scroll");
+    if (dom?.getBoundingClientRect && scroller) {
+      const r = dom.getBoundingClientRect(), s = scroller.getBoundingClientRect();
+      scroller.scrollTop += r.top - s.top - Math.min(s.height / 3, 160);           // the block a third of the way down
+    }
   }
   function openFirst() {
     const first = W?.book.contents.find(e => e.file && e.file !== W.split?.piece?.file);
@@ -489,10 +524,11 @@ const BookEditor = (() => {
   }
 
   /* ——— the bar over the text: changed outside, not saved, kept text, can't open ——— */
-  /* the conflict after this window's own replace or restore, when something was typed meanwhile after all */
+  /* the conflict after this window's own replace, restore or accepted suggestion, when something was typed meanwhile after all */
   const CHANGED_BY = {
     replace: "The replace changed this piece while you were typing. Reload shows the replaced text; Keep mine keeps yours, and the replaced text stays in History.",
     restore: "The restore changed this piece while you were typing. Reload shows the restored text; Keep mine keeps yours, and the restored text stays in History.",
+    suggestion: "Accepting a suggestion changed this piece while you were typing. Reload shows it accepted; Keep mine keeps yours, and the text before is in History.",
   };
   function bar(piece) {
     if (!W) return;
@@ -588,9 +624,9 @@ const BookEditor = (() => {
       const isPart = e.kind === "part", indent = inPart && !isPart && group === "Body";
       if (isPart) inPart = true;
       const cls = `bb-row${e.auto ? " auto" : ""}${isPart ? " part" : ""}${indent ? " in" : ""}${e.file && e.file === cur ? " cur" : ""}${e.file && !e.title ? " untitled" : ""}`;
-      if (e.auto) {
-        return `<li class="${cls}" data-i="${i}" data-key="auto:${esc(e.auto)}" draggable="true"><span class="bb-a" tabindex="0" title="Made by Studio from the book's details and text">
-          <span class="bk-dot" aria-hidden="true"></span><span class="bb-t">${esc(autoPageName(b, e.auto))}</span><span class="bb-w">auto</span></span></li>`;
+      if (e.auto) {          // made by Studio: it opens in Compose, at its first page
+        return `<li class="${cls}" data-i="${i}" data-key="auto:${esc(e.auto)}" draggable="true"><a class="bb-a" href="${bookComposeHash(b.id)}?entry=${i}" title="Made by Studio from the book's details and text · Open in Compose">
+          <span class="bk-dot" aria-hidden="true"></span><span class="bb-t">${esc(autoPageName(b, e.auto))}</span><span class="bb-w">auto</span></a></li>`;
       }
       const kind = pieceKindName(e.kind) + (e.form && e.form !== "prose" ? ` · ${e.form}` : "") + (e.status ? ` · ${e.status}` : "");
       return `<li class="${cls}" data-i="${i}" data-file="${esc(e.file)}" data-key="${esc(e.file)}" draggable="true"><a class="bb-a" href="${bookHash(b.id, e.file)}" title="${esc(kind)}"${e.file === cur ? ' aria-current="page"' : ""}>
@@ -604,8 +640,8 @@ const BookEditor = (() => {
       return `<section class="bb-group"><div class="bb-ghead"><h2 class="label">${esc(name)}</h2><span class="label">${pieces ? esc(bookCount(words)) : ""}</span></div>
         <ol class="bb-list">${items.map(e => row(e, b.contents.indexOf(e), name)).join("")}</ol></section>`;
     }).join("");
-    host.innerHTML = `<div class="bb-scroll"><div class="bb-head"><div class="bb-k"><span class="kicker"><a href="#/books">Books</a> · ${esc(bookKindName(b.kind))}</span>
-        <a class="kicker bb-set" href="${bookTabHash(b.id, "details")}">Settings</a></div>
+    host.innerHTML = `<nav class="bc-tabs bw-tabs" role="tablist" aria-label="${esc(b.title)}">${bookViewTabs(b.id, "write", cur)}</nav>
+      <div class="bb-scroll"><div class="bb-head"><div class="bb-k"><span class="kicker"><a href="#/books">Books</a> · ${esc(bookKindName(b.kind))}</span></div>
         <p class="bb-book">${esc(b.title)}</p><p class="bb-total">${esc(bookWords(b.contents.reduce((n, e) => n + (e.words || 0), 0)))}</p></div>
       <nav class="bb-groups">${groups || `<p class="bb-empty">Nothing in this book yet.</p>`}</nav></div>
       <div class="bb-foot"><button type="button" class="btn small" data-new="chapter"><span class="plus">+</span>Chapter</button>
@@ -623,12 +659,13 @@ const BookEditor = (() => {
       const a = $("a.bb-a", r);
       if (a) { if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); }
     }
+    $(".bw-tabs a[aria-current]", W.binder)?.setAttribute("href", bookHash(W.book.id, file));      // Write: the piece written in
   }
   function toggleBinder() {
     if (!W) return;
     const hide = !W.root.classList.contains("nobinder");
     W.root.classList.toggle("nobinder", hide);
-    $(".bw-tog", W.root).setAttribute("aria-pressed", String(!hide));
+    $(".bw-status > .bw-tog", W.root).setAttribute("aria-pressed", String(!hide));       // Pieces (the panes' heads have Close buttons too)
     pref.set("bookBinder", hide ? "0" : "1");
     tools("binder", !hide);           // shown: only when every text keeps its 360 px
   }
@@ -639,6 +676,7 @@ const BookEditor = (() => {
       if (e.target.closest("[data-new]")) return newPiece(e.target.closest("[data-new]").dataset.new);
       if (e.target.closest("[data-add]")) return addMenu(e.target.closest("[data-add]"));
       const a = e.target.closest("a.bb-a");
+      if (a?.closest(".bb-row.auto")) { if (e.altKey) e.preventDefault(); return; }      // a page made by Studio: its link goes to Compose (not beside, not saved)
       if (a && e.button === 0 && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {       // Alt-click: in the second pane
         e.preventDefault();
         return tools("split", a.closest(".bb-row").dataset.file);
@@ -750,6 +788,7 @@ const BookEditor = (() => {
       {label: "Kind", items: bookLists.pieces.map(k => ({label: pieceKindName(k), checked: e.kind === k, act: () => e.kind !== k && setEntry(e.file, {kind: k}, `${pieceTitle(e)} is now a ${pieceKindName(k).toLowerCase()}`).catch(() => {})}))},
       {label: "Form", items: bookLists.forms.map(f => ({label: f[0].toUpperCase() + f.slice(1), checked: (e.form || "prose") === f, act: () => (e.form || "prose") !== f && setForm(e.file, f)}))},
       {label: "Status", items: BOOK_STATUSES.map(s => ({label: s[0].toUpperCase() + s.slice(1), checked: e.status === s, act: () => e.status !== s && setEntry(e.file, {status: s}).catch(() => {})}))},
+      {label: "Open beside", kbd: "Alt+click", act: () => tools("split", e.file)},
       "-",
       {label: "Duplicate", act: () => duplicate(e)},
       {label: "Split here", disabled: !open, act: () => splitHere(e)},
@@ -1002,6 +1041,6 @@ const BookEditor = (() => {
   }
   /* every save under way, of open and closed pieces */
   const settled = () => Promise.all([...live].map(p => p.saving).filter(Boolean)).catch(() => {});
-  return {mount, unmount, pending, refresh,
+  return {mount, unmount, pending, refresh, reveal,
     get win() { return W; }, Piece, bar, places, forget, leaving, settled, openPiece, newPiece, toggleBinder, reloadBook};
 })();

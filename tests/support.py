@@ -13,7 +13,7 @@ from studio import config
 from studio.store import Store
 from studio.web import Handler, StudioServer
 
-_ENV = ("STUDIO_ART", "STUDIO_CONFIG", "STUDIO_CACHE")
+_ENV = ("STUDIO_ART", "STUDIO_CONFIG", "STUDIO_CACHE", "STUDIO_BACKUPS")
 
 
 @contextlib.contextmanager
@@ -24,6 +24,7 @@ def temp_studio():
     os.environ["STUDIO_ART"] = str(tmp / "lib")
     os.environ["STUDIO_CONFIG"] = str(tmp / "config.json")
     os.environ["STUDIO_CACHE"] = str(tmp / "cache")
+    os.environ["STUDIO_BACKUPS"] = str(tmp / "backups")
     config.CONFIG_FILE = tmp / "config.json"
     config.refresh()
     (config.POEMS).mkdir(parents=True, exist_ok=True)

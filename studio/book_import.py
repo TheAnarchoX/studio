@@ -13,9 +13,14 @@ Markdown), and the rules are applied to the blocks, in order:
  5. each remaining `h1` starts a piece, its kind from HEADING_KINDS (else chapter);
  6. at the start of a piece, one to four quote-like paragraphs followed by a `-`, `–` or `—` line are an epigraph;
  7. `h2`/`h3` inside a piece stay `##`/`###`;
- 8. images are kept under their own names and referenced as `../images/<name>`.
+ 8. images are kept under their own names and referenced as `../images/<name>`;
+ 9. list items stay list items, nested levels kept: from a .docx in the numbering format and at the number Word shows
+    them with, when the document's numbered paragraphs line up one to one with mammoth's items (else bullets, and
+    numbers by level: decimal, lower-alpha, lower-roman, decimal); they are never quote-like or a dedication;
+10. underline and strikethrough are kept (alignment and point sizes are not);
+11. Word equations are not imported: the proposal's warnings say how many the file has.
 Documents are built as ProseMirror JSON and written with `manuscript.serialize`, so the Markdown is canonical
-(escaping, notes `^[…]`, italics) and nothing is concatenated by hand.
+(escaping, notes `^[…]`, italics, lists) and nothing is concatenated by hand.
 """
 import base64
 import binascii
@@ -23,16 +28,20 @@ import hashlib
 import io
 import re
 import shutil
+import xml.etree.ElementTree as ET
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 
 from . import manuscript
 from .books import FORMS, KINDS, LANGUAGE, PIECE_KINDS, Books, BooksError
+from .manuscript_lists import STYLES, normalize
 
 STYLE_MAP = """p[style-name='Title'] => h1.doc-title:fresh
 p[style-name='Subtitle'] => p.doc-subtitle:fresh
 p[style-name='Quote'] => blockquote > p:fresh
-p[style-name='Intense Quote'] => blockquote > p:fresh"""
+p[style-name='Intense Quote'] => blockquote > p:fresh
+u => u"""
 
 HEADING_KINDS = {
     "voorwoord": "foreword", "foreword": "foreword", "preface": "preface",
@@ -200,6 +209,10 @@ def _inline(kids, marks, notes, in_note=False, lines=None):
             sub = _inline(k.kids, marks | {"em"}, notes, in_note, lines)
         elif t in ("strong", "b"):
             sub = _inline(k.kids, marks | {"strong"}, notes, in_note, lines)
+        elif t == "u":
+            sub = _inline(k.kids, marks | {"underline"}, notes, in_note, lines)
+        elif t in ("s", "del", "strike"):
+            sub = _inline(k.kids, marks | {"strike"}, notes, in_note, lines)
         elif t == "br":
             if in_note:
                 _text(out, " ", marks)
@@ -219,7 +232,7 @@ def _inline(kids, marks, notes, in_note=False, lines=None):
                 if lines is not None:
                     lines["start"] = False
             continue
-        else:       # links, sup, sub, spans, underline: the text stays
+        else:       # links, sup, sub, spans: the text stays
             sub = _inline(k.kids, marks, notes, in_note, lines)
         for n in sub:
             if n["type"] == "text":
@@ -279,19 +292,23 @@ def _plain_alt(img):
 # ---------------------------------------------------------------------------------------------------------
 # HTML -> blocks
 
-def html_to_blocks(html: str) -> list[dict]:
-    """mammoth's HTML -> blocks {"type": h1|h2|h3|p|quote|title|subtitle|image, "md", "italic_only", "empty", ...}.
+def html_to_blocks(html: str, list_styles: list[tuple[str, int, int]] | None = None) -> list[dict]:
+    """mammoth's HTML -> blocks {"type": h1|h2|h3|p|li|quote|title|subtitle|image, "md", "italic_only", "empty", ...}.
     `md` is the block's text in the dialect's inline syntax; footnotes and endnotes become `^[…]` at their
-    reference. Lists become one paragraph per item, tables one per cell; links, underline and the like keep the text."""
+    reference. Tables become `table` blocks ("node"); links and the like keep the text. Each list item is an `li` block
+    with "list" (a style of `manuscript_lists.STYLES`), "level" (how deeply it is nested) and "_n" (the number it
+    shows): from `list_styles`, one (style, level, number) per item in order (`_docx_list_styles`), when they line up
+    with the items, else DEFAULT_STYLES and the item's place in its list."""
     root = _tree(html)
     notes = {}
     _take_notes(root, notes)
-    out = []
-    _walk(root.kids, notes, out)
+    out, items = [], []
+    _walk(root.kids, notes, out, items)
+    _style_items(items, list_styles)
     return out
 
 
-def _walk(kids, notes, out):
+def _walk(kids, notes, out, items):
     for k in kids:
         if not isinstance(k, _El):
             continue
@@ -310,9 +327,11 @@ def _walk(kids, notes, out):
             else:
                 _paragraph(k, "quote", notes, out)
         elif t in ("ul", "ol"):
-            _list(k, notes, out)
+            _list(k, notes, out, items)
+        elif t == "table":
+            _table(k, notes, out, items)
         elif t not in ("script", "style", "head", "img", "br", "hr"):
-            _walk(k.kids, notes, out)
+            _walk(k.kids, notes, out, items)
 
 
 def _has_br(el):
@@ -330,15 +349,15 @@ def _paragraph(el, kind, notes, out):
             out.append(image)
 
 
-def _list(el, notes, out, depth=0):
-    n = 0
+def _list(el, notes, out, items, depth=0):
+    """An `ol` or `ul`: per item an `li` block (its paragraphs joined by a space), the pictures in it after it, then its
+    nested lists one level deeper. Every item, also one without text, goes into `items` for `_style_items`; an `li`
+    holding nothing but a nested list (mammoth opens one when a list starts deeper than the one before it) is no item."""
+    place = 0
     for li in el.kids:
         if not isinstance(li, _El) or li.tag != "li":
             continue
-        n += 1
-        marker = "• " if el.tag == "ul" else f"{n}. "
-        rest = []
-        nested = []
+        rest, nested = [], []
         for c in li.kids:
             if isinstance(c, _El) and c.tag in ("ul", "ol"):
                 nested.append(c)
@@ -347,20 +366,113 @@ def _list(el, notes, out, depth=0):
                 rest.append(" ")
             else:
                 rest.append(c)
-        nodes = _inline(rest, set(), notes)
-        nodes = _trim(nodes)
-        if nodes:
-            lead = []
-            _text(lead, marker, set())
-            block = _block("p", lead + nodes)
+        if not (nested and all(isinstance(c, str) and not c.strip() for c in rest)):
+            place += 1
+            block = _block("li", _inline(rest, set(), notes))
+            items.append({"block": None if block["empty"] else block, "level": depth, "ordered": el.tag == "ol",
+                          "place": place})
             if not block["empty"]:
                 out.append(block)
-        for img in _images(li.kids):
-            image = _image_block(img)
-            if image:
-                out.append(image)
+            for img in _images(rest):
+                image = _image_block(img)
+                if image:
+                    out.append(image)
         for c in nested:
-            _list(c, notes, out, depth + 1)
+            _list(c, notes, out, items, depth + 1)
+
+
+def _rows(table):
+    """The `tr` elements of a table (not those of tables nested in its cells)."""
+    for k in table.kids:
+        if isinstance(k, _El) and k.tag == "tr":
+            yield k
+        elif isinstance(k, _El) and k.tag in ("thead", "tbody", "tfoot"):
+            yield from _rows(k)
+
+
+def _flat(kids, rest, lists):
+    """A cell's content as inline `kids` in `rest`: paragraphs and nested tables' cells one after another, apart by a
+    space; lists go to `lists`."""
+    for c in kids:
+        if not isinstance(c, _El):
+            rest.append(c)
+        elif c.tag in ("ul", "ol"):
+            lists.append(c)
+        elif c.tag in ("p", "tr", "td", "th", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"):
+            _flat(c.kids, rest, lists)
+            rest.append(" ")
+        elif c.tag in ("table", "thead", "tbody", "tfoot", "colgroup"):
+            _flat(c.kids, rest, lists)
+        else:
+            rest.append(c)
+
+
+def _table(el, notes, out, items):
+    """A `table` -> one block with a table node: the cell's paragraphs joined by a space, a line break a space, a nested
+    table its cells' text, a list its items' text (still counted in `items`, which `_docx_list_styles` counts too),
+    rows padded to the widest, `header` always true (the first row of a Word table is nearly always a header; the author
+    can turn it off), `align` all None.
+    The pictures in it come after the table."""
+    rows, pictures = [], []
+    for tr in _rows(el):
+        cells = [c for c in tr.kids if isinstance(c, _El) and c.tag in ("td", "th")]
+        if not cells:
+            continue
+        row = []
+        for c in cells:
+            rest, lists = [], []
+            _flat(c.kids, rest, lists)
+            nodes = _inline(rest, set(), notes)
+            pictures.extend(_image_block(img) for img in _images(rest))
+            for li in lists:
+                scratch, listed = [], []
+                _list(li, notes, scratch, listed)
+                for item in listed:
+                    item["block"] = None
+                items.extend(listed)
+                for b in scratch:
+                    if b["type"] == "li":
+                        if nodes:                   # apart by a space; nothing before a list the cell starts with
+                            _text(nodes, " ", set())
+                        nodes.extend(b["nodes"])
+                    elif b["type"] == "image":
+                        pictures.append(b)
+            merged = []                             # a line break is a space; text with the same marks one node
+            for n in nodes:
+                if n["type"] in ("text", "hard_break"):
+                    _text(merged, n.get("text", " "), {m["type"] for m in n.get("marks", [])})
+                else:
+                    merged.append(n)
+            nodes = _trim(merged)
+            row.append({"type": "table_cell", "content": nodes} if nodes else {"type": "table_cell"})
+        rows.append(row)
+    if not rows:
+        return
+    width = max(len(r) for r in rows)
+    content = [{"type": "table_row", "content": r + [{"type": "table_cell"} for _ in range(width - len(r))]}
+               for r in rows]
+    node = {"type": "table", "attrs": {"header": True, "align": [None] * width}, "content": content}
+    out.append({"type": "table", "md": "", "italic_only": False, "empty": False, "node": node})
+    out.extend(image for image in pictures if image)
+
+
+DEFAULT_STYLES = ("decimal", "lower-alpha", "lower-roman", "decimal")     # an `ol` item's style by level
+
+
+def _style_items(items, list_styles):
+    """Give each item's block its "list", "level" and "_n": Word's style and number when `list_styles` has one entry
+    per item at the item's own level, else bullet for `ul`, DEFAULT_STYLES for `ol` and its place in its list."""
+    word = list_styles is not None and len(list_styles) == len(items) and all(
+        style in STYLES and level == item["level"] for (style, level, _), item in zip(list_styles, items))
+    for k, item in enumerate(items):
+        if item["block"] is None:
+            continue
+        if word:
+            style, _, n = list_styles[k]
+        else:
+            style = DEFAULT_STYLES[min(item["level"], 3)] if item["ordered"] else "bullet"
+            n = item["place"]
+        item["block"].update(list=style, level=item["level"], _n=n)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -375,13 +487,43 @@ def marker(kind, form):
     return f"<!-- kind: {kind}; form: {form} -->"
 
 
+def _display_end(lines, i):
+    """The line that ends the display math starting at line `i` (as the dialect's `$$` block rule reads it), or None
+    when there is none there: `$$…$$` on one line, else `$$` and the first later line ending in `$$` before a blank
+    line. Not indented four columns or more, and no `$$` later in the first line unless it ends there."""
+    first = lines[i].expandtabs(4)
+    stripped = first.strip()
+    if not stripped.startswith("$$") or len(first) - len(first.lstrip()) >= 4:
+        return None
+    if len(stripped) > 3 and stripped.endswith("$$"):
+        return i
+    if "$$" in stripped[2:]:
+        return None
+    for j in range(i + 1, len(lines)):
+        line = lines[j].strip()
+        if not line:
+            return None
+        if line.endswith("$$"):
+            return j
+    return None
+
+
 def _poem_lines(text, poem):
     """Spaces and tabs that start a poem line become no-break spaces (a tab two), written as entities so that Markdown
     keeps them, also at a stanza's start: the lines inside a ::: poem block, and in a piece whose form is poem every
-    line but the dialect's own block lines (headings, quotations, scene breaks, ::: lines). Prose stays as it is."""
-    out, open_ = [], []          # the ::: blocks around the line, by name
-    for line in text.split("\n"):
+    line but the dialect's own block lines (headings, quotations, scene breaks, ::: lines) and the lines of display
+    math (TeX, `_display_end`). Prose stays as it is."""
+    lines = text.split("\n")
+    out, open_, i = [], [], 0             # the ::: blocks around the line, by name
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+        end = _display_end(lines, i) if not open_ or open_[-1] != "poem" else None   # in `::: poem` `$$` is a line
+        if end is not None:
+            out += lines[i:end + 1]
+            i = end + 1
+            continue
+        i += 1
         if stripped.startswith(":::"):
             name = stripped[3:].strip()
             if not name:
@@ -473,10 +615,33 @@ def _rebuild(source, kind, form):
     return _piece(kind, title, blocks, form)
 
 
+_YAML = re.compile(r"\A---[ \t]*\n(.*?\n)(?:---|\.\.\.)[ \t]*(?:\n|\Z)", re.S)
+
+
+_YAML_LINE = re.compile(r"[A-Za-z_][\w-]*\s*:|\s+\S|\s*#|\s*-\s")
+
+
+def _is_yaml(block) -> bool:
+    """Whether the lines between the dashes are metadata: `key: value` lines (or their indented continuations,
+    comments and list items), none blank at the very top (Pandoc's rule); prose between two rules stays text."""
+    lines = block.split("\n")[:-1]
+    if not lines or not lines[0].strip():
+        return False
+    return all(not l.strip() or _YAML_LINE.match(l) for l in lines)
+
+
 def _markdown(text, signature, fallback):
     """A Markdown or text file -> the proposal. Text before the first marker follows the rules (title, dedication, a
     piece at every `# `); each marker starts a piece of its kind and form. Every piece keeps its `source`."""
-    sections = _sections(manuscript._clean(text))
+    text = manuscript._clean(text)
+    head = _YAML.match(text)
+    if head and not _is_yaml(head.group(1)):
+        head = None             # a thematic break and a scene break are not a metadata block
+    if head:        # Studio's own export (and Pandoc) start with a YAML block: not text, but it names the book
+        title = re.search(r"^title:\s*(.+?)\s*$", head.group(1), re.M)
+        fallback = (title.group(1).strip("\"'") if title else "") or fallback
+        text = text[head.end():]
+    sections = _sections(text)
     for i, s in enumerate(sections):
         s["blocks"] = [] if s["marker"] else _section_blocks(s["text"], "prose", i)
     k = next((i for i, s in enumerate(sections) if s["marker"]), len(sections))
@@ -594,7 +759,8 @@ def _epigraph(body):
 
 
 def _body_nodes(blocks):
-    """Blocks -> document nodes; adjacent quotations share one blockquote."""
+    """Blocks -> document nodes; adjacent quotations share one blockquote; list items are made canonical by
+    `manuscript_lists.normalize` (levels clamped, `start` from the number an item showed where it starts a list)."""
     nodes = []
     for b in blocks:
         t = b["type"]
@@ -609,11 +775,14 @@ def _body_nodes(blocks):
             nodes.append({"type": "heading", "attrs": {"level": 3 if t == "h3" else 2}, "content": b["nodes"]})
         elif t in ("p", "subtitle"):
             nodes.append({"type": "paragraph", "content": b["nodes"]})
+        elif t == "li":
+            nodes.append({"type": "list_item", "attrs": {"list": b["list"], "level": b["level"], "start": None},
+                          "content": b["nodes"], "_n": b["_n"]})
         else:
             nodes.append(b["node"])
     for n in nodes:
         n.pop("_open", None)
-    return nodes
+    return normalize(nodes)
 
 
 def _piece(kind, title_nodes, blocks, form="prose"):
@@ -699,6 +868,170 @@ def _split_pieces(rest):
 
 
 # ---------------------------------------------------------------------------------------------------------
+# Word's numbering
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+_FORMATS = {"bullet": "bullet", "none": "bullet", "lowerLetter": "lower-alpha", "upperLetter": "upper-alpha",
+            "lowerRoman": "lower-roman", "upperRoman": "upper-roman"}         # any other numFmt is a number: decimal
+# Paragraph styles that STYLE_MAP or mammoth's own style map make something else before its list rules (a numbered
+# heading is a heading); names compare without case, as mammoth's do, ids exactly.
+_NOT_ITEM_NAMES = {"title", "subtitle", "quote", "intense quote", "heading", "footnote text", "endnote text",
+                   "annotation text", "footnote", "endnote", *(f"heading {i}" for i in range(1, 7))}
+_NOT_ITEM_IDS = {"Heading", *(f"Heading{i}" for i in range(1, 7))}
+_MAMMOTH_LEVELS = ("0", "1", "2", "3", "4")      # its list rules go five levels deep; deeper is a paragraph
+_UNREAD = {_W + t for t in ("pPr", "rPr", "sectPr", "tblPr", "trPr", "tcPr", "sdtPr", "del", "moveFrom")} | {_MC + "Choice"}
+_INLINE = {_W + t for t in ("r", "hyperlink", "ins", "moveTo", "smartTag", "customXml", "sdtContent")}
+_SHOWN = {_W + t for t in ("tab", "sym", "noBreakHyphen", "softHyphen", "footnoteReference", "endnoteReference",
+                           "drawing", "pict", "object")}
+
+
+def _val(el):
+    return None if el is None else el.get(_W + "val")
+
+
+def _number(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format(lvl):
+    """A `w:lvl` -> (style, start); Word starts a level without `w:start` at 0, but a list from such a file is read
+    as starting at 1, which is what its writer meant."""
+    return _FORMATS.get(_val(lvl.find(_W + "numFmt")), "decimal"), _number(_val(lvl.find(_W + "start")), 1)
+
+
+def _paragraphs(el):
+    """The `w:p` elements mammoth reads, in its order (not those in deletions, deleted rows or an mc:Choice whose
+    Fallback it reads instead)."""
+    for c in el:
+        if c.tag in _UNREAD or (c.tag == _W + "tr" and c.find(f"{_W}trPr/{_W}del") is not None):
+            continue
+        if c.tag == _W + "p":
+            yield c
+        yield from _paragraphs(c)
+
+
+def _shows(el):
+    """Whether mammoth writes anything for this paragraph's content (it leaves an empty paragraph out)."""
+    for c in el:
+        t = c.tag
+        if t == _W + "t":
+            shown = bool(c.text)
+        elif t == _W + "br":
+            shown = c.get(_W + "type") in (None, "textWrapping")
+        elif t == _W + "bookmarkStart":
+            shown = c.get(_W + "name") != "_GoBack"
+        elif t == _W + "sdt":
+            shown = _shows(c.find(_W + "sdtContent") if c.find(_W + "sdtContent") is not None else [])
+        elif t == _MC + "AlternateContent":
+            shown = _shows(c.find(_MC + "Fallback") if c.find(_MC + "Fallback") is not None else [])
+        else:
+            shown = t in _SHOWN or (t in _INLINE and _shows(c))
+        if shown:
+            return True
+    return False
+
+
+def _docx_list_styles(data: bytes) -> list[tuple[str, int, int]]:
+    """(style, level, number) for each paragraph of the .docx that mammoth makes a list item, in document order: the
+    numbering format of its level (`w:numFmt`) and the number Word shows it with. A paragraph's numbering is found as
+    mammoth finds it (its own `w:numPr`, else a list linked to its paragraph style). Word counts per list
+    (`w:abstractNum`) and level, from the level's `w:start`: every `w:num` of a list goes on with the same count, except
+    that a `w:num` with a `w:startOverride` for a level starts that level there the first time it is used; a deeper
+    level starts again when a shallower one goes on. Numbered paragraphs mammoth doesn't make items (empty ones,
+    numbered headings) are counted too. [] when the file has no numbering or can't be read."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = set(z.namelist())
+            numbering, document, styles = (ET.fromstring(z.read(name)) if name in names else None
+                                           for name in ("word/numbering.xml", "word/document.xml", "word/styles.xml"))
+        if numbering is None or document is None or document.find(_W + "body") is None:
+            return []
+        return _count(numbering, styles, document.find(_W + "body"))
+    except Exception:       # the numbering only refines what mammoth read; without it the import still works
+        return []
+
+
+def _count(numbering, styles, body):
+    abstracts, linked = {}, {}      # abstractNumId -> {"levels": {ilvl: lvl}, "link"}; paragraph style -> (abstract, ilvl)
+    for a in numbering.findall(_W + "abstractNum"):
+        aid, levels, loose = a.get(_W + "abstractNumId"), {}, None
+        for lvl in a.findall(_W + "lvl"):
+            ilvl = lvl.get(_W + "ilvl")
+            if ilvl is None:
+                loose = lvl
+            else:
+                levels[ilvl] = lvl
+        if loose is not None:
+            levels.setdefault("0", loose)
+        for ilvl, lvl in levels.items():
+            if _val(lvl.find(_W + "pStyle")) is not None:
+                linked[_val(lvl.find(_W + "pStyle"))] = (aid, ilvl)
+        abstracts[aid] = {"levels": levels, "link": _val(a.find(_W + "numStyleLink"))}
+    nums = {}                       # numId -> {"abstract", "starts": {ilvl: startOverride}, "levels": {ilvl: lvl}}
+    for n in numbering.findall(_W + "num"):
+        num = nums[n.get(_W + "numId")] = {"abstract": _val(n.find(_W + "abstractNumId")), "starts": {}, "levels": {}}
+        for o in n.findall(_W + "lvlOverride"):
+            if o.find(_W + "startOverride") is not None:
+                num["starts"][o.get(_W + "ilvl")] = _number(_val(o.find(_W + "startOverride")), 1)
+            if o.find(_W + "lvl") is not None:
+                num["levels"][o.get(_W + "ilvl")] = o.find(_W + "lvl")
+    names, num_styles = {}, {}      # paragraph style id -> name (lower case); numbering style id -> numId
+    for s in styles.findall(_W + "style") if styles is not None else []:
+        if s.get(_W + "type") == "paragraph":
+            names[s.get(_W + "styleId")] = (_val(s.find(_W + "name")) or "").lower()
+        elif s.get(_W + "type") == "numbering":
+            num_styles[s.get(_W + "styleId")] = _val(s.find(f"{_W}pPr/{_W}numPr/{_W}numId"))
+
+    def find(num_id, ilvl, seen=()):
+        """(abstractNumId, ilvl) of a numbering level, following a list style's link, as mammoth does; else None."""
+        num = nums.get(num_id)
+        abstract = abstracts.get(num["abstract"]) if num and num_id not in seen else None
+        if abstract is None:
+            return None
+        if abstract["link"] is not None:
+            return find(num_styles.get(abstract["link"]), ilvl, (*seen, num_id))
+        return (num["abstract"], ilvl) if ilvl in abstract["levels"] else None
+
+    out, counts, restarted, carried = [], {}, set(), False
+    for p in _paragraphs(body):
+        ppr = p.find(_W + "pPr")
+        if ppr is not None and ppr.find(f"{_W}rPr/{_W}del") is not None:     # its text joins the next paragraph
+            carried = carried or _shows(p)
+            continue
+        shows, carried = carried or _shows(p), False
+        num_id = _val(p.find(f"{_W}pPr/{_W}numPr/{_W}numId"))
+        ilvl = _val(p.find(f"{_W}pPr/{_W}numPr/{_W}ilvl"))
+        style_id = _val(p.find(f"{_W}pPr/{_W}pStyle"))
+        if num_id is not None and ilvl is not None:
+            found = find(num_id, ilvl)
+        elif style_id in linked:
+            found, num_id = linked[style_id], None
+        else:
+            found = find(num_id, "0") if num_id is not None else None
+        if found is None:
+            continue
+        aid, ilvl = found
+        num = nums.get(num_id) or {"starts": {}, "levels": {}}
+        style, start = _format(num["levels"].get(ilvl, abstracts[aid]["levels"][ilvl]))
+        level, count = _number(ilvl, 0), counts.setdefault(aid, {})
+        if ilvl in num["starts"] and (num_id, ilvl) not in restarted:
+            restarted.add((num_id, ilvl))
+            count[level] = num["starts"][ilvl]
+        else:
+            count[level] = count[level] + 1 if level in count else start
+        for deeper in [k for k in count if k > level]:
+            del count[deeper]
+        if (shows and ilvl in _MAMMOTH_LEVELS and style_id not in _NOT_ITEM_IDS
+                and names.get(style_id) not in _NOT_ITEM_NAMES):
+            out.append((style, level, count[level]))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------
 # Propose
 
 def _docx_blocks(data):
@@ -733,19 +1066,35 @@ def _docx_blocks(data):
                                          convert_image=mammoth.images.img_element(convert))
     except Exception:
         raise BooksError("That file couldn't be read as a Word document. Save it again as .docx and retry.") from None
-    return html_to_blocks(result.value), images, skipped[0]
+    return html_to_blocks(result.value, _docx_list_styles(data)), images, skipped[0]
+
+
+_M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+
+
+def _docx_equations(data: bytes) -> int:
+    """How many Word equations (`m:oMath`) the .docx holds, in its text, footnotes and endnotes: Studio doesn't import
+    them (mammoth leaves them out), and the review screen says so. 0 when that can't be read."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            parts = [z.read(name) for name in ("word/document.xml", "word/footnotes.xml", "word/endnotes.xml")
+                     if name in z.namelist()]
+        return sum(1 for part in parts for _ in ET.fromstring(part).iter(_M + "oMath"))
+    except Exception:       # the count only adds a warning; the import itself already read the file
+        return 0
 
 
 def propose(name: str, data: bytes, signature: str = "") -> dict:
     """What importing this file would make: {"title", "subtitle", "author", "pieces", "images", "warnings"}."""
     ext = Path(str(name or "")).suffix.lower()
     stem = Path(str(name or "")).stem
-    images, skipped = {}, 0
+    images, skipped, equations = {}, 0, 0
     if not isinstance(data, (bytes, bytearray)) or not data:
         raise BooksError("The file is empty.")
     fallback = stem.replace("_", " ").strip()
     if ext == ".docx":
         blocks, images, skipped = _docx_blocks(bytes(data))
+        equations = _docx_equations(bytes(data))
         out = _assemble(blocks, signature, fallback)
         for p in out["pieces"]:
             p.pop("_blocks", None)
@@ -760,6 +1109,9 @@ def propose(name: str, data: bytes, signature: str = "") -> dict:
     out["images"] = images
     out["warnings"] = ([f"{skipped} image{'s' if skipped != 1 else ''} in a format Studio can't use "
                         f"{'were' if skipped != 1 else 'was'} left out."] if skipped else [])
+    if equations:
+        out["warnings"].append(f"This file has {equations} equation{'s' if equations != 1 else ''}; "
+                               f"Studio doesn't import equations yet.")
     return out
 
 

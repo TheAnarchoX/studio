@@ -110,6 +110,28 @@ class BooksTest(unittest.TestCase):
             self.assertEqual(e.exception.code, 404)
 
     # ——— the book's details ———
+    def test_update_design_and_spelling_kept(self):
+        self.book()
+        path = self.lib / "Books" / "The Long Road" / "book.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["future"] = {"keep": True}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        r = self.b.update("The Long Road", {"design": {"text": {"size": 11}, "x": 1}, "spelling": {"words": ["xyzzy"]}})
+        self.assertEqual(r["spelling"], {"languages": ["en"], "words": ["xyzzy"]})
+        self.b.update("The Long Road", {"design": {"text": {"align": "left"}}, "title": "The Longer Road"})
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["design"], {"text": {"size": 11, "align": "left"}, "x": 1})
+        self.assertEqual(stored["spelling"], {"words": ["xyzzy"]})
+        self.assertEqual(stored["future"], {"keep": True})
+        self.assertEqual(stored["title"], "The Longer Road")
+        self.b.update("The Long Road", {"spelling": {"languages": ["en", "nl"]}})
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["spelling"],
+                         {"words": ["xyzzy"], "languages": ["en", "nl"]})
+        self.b.update("The Long Road", {"design_reset": ["text"]})
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["design"], {"x": 1})
+        with self.assertRaises(BooksError):
+            self.b.update("The Long Road", {"design": {"margins": {"inside": 2}}})
+
     def test_reorder_and_unknown_keys_kept(self):
         self.book()
         path = self.lib / "Books" / "The Long Road" / "book.json"
@@ -354,6 +376,36 @@ class BooksTest(unittest.TestCase):
         self.assertFalse((ed2 / "editions").exists())
 
     # ——— search and replace ———
+    def test_search_and_replace_in_list_items_and_aligned_text(self):
+        self.book(kind="essays")
+        self.write_md("The Long Road", "essay-1.md", "- Een appel\n- Twee appels\n\n::: center\nDrie appels\n:::\n")
+        self.assertEqual(len(self.b.search("The Long Road", "appel")), 3)
+        self.assertEqual(self.b.replace("The Long Road", "appels", "peren"), {"replaced": 2})
+        md = (self.lib / "Books" / "The Long Road" / "manuscript" / "essay-1.md").read_text(encoding="utf-8")
+        self.assertEqual(md, "- Een appel\n- Twee peren\n\n::: center\nDrie peren\n:::\n")
+
+    def test_search_finds_table_cells(self):
+        """A table cell is text, its notes after it: found and replaced row by row, cell by cell."""
+        self.book(kind="essays")
+        self.write_md("The Long Road", "essay-1.md",
+                      "| Stad | Fruit |\n| --- | --: |\n| Utrecht | twee appels^[Rode appels.] |\n| Gent | drie appels |\n")
+        hits = self.b.search("The Long Road", "appels")
+        self.assertEqual([(h["in"], h["before"]) for h in hits], [("text", "twee "), ("note", "Rode "), ("text", "drie ")])
+        self.assertEqual(self.b.search("The Long Road", "Utrecht")[0]["in"], "text")
+        self.assertEqual(self.b.replace("The Long Road", "appels", "peren"), {"replaced": 3})
+        md = (self.lib / "Books" / "The Long Road" / "manuscript" / "essay-1.md").read_text(encoding="utf-8")
+        self.assertEqual(md, "| Stad | Fruit |\n| --- | --: |\n| Utrecht | twee peren^[Rode peren.] |\n| Gent | drie peren |\n")
+
+    def test_search_skips_math(self):
+        """Math is no text to find or replace: one gap, like a citation; replacing around it keeps it."""
+        self.book(kind="essays")
+        self.write_md("The Long Road", "essay-1.md", "De som $x + som$ klopt, som.\n\n$$\nsom\n$$\n")
+        hits = self.b.search("The Long Road", "som")
+        self.assertEqual([(h["before"], h["after"]) for h in hits], [("De ", "   klopt, som."), ("De som   klopt, ", ".")])
+        self.assertEqual(self.b.replace("The Long Road", "som", "totaal"), {"replaced": 2})
+        md = (self.lib / "Books" / "The Long Road" / "manuscript" / "essay-1.md").read_text(encoding="utf-8")
+        self.assertEqual(md, "De totaal $x + som$ klopt, totaal.\n\n$$\nsom\n$$\n")
+
     def test_search_and_replace(self):
         self.book(kind="essays")
         self.write_md("The Long Road", "essay-1.md",
@@ -426,6 +478,92 @@ class BooksTest(unittest.TestCase):
             with self.assertRaises(BooksError, msg=str(bad)):
                 self.b.save_sources("The Long Road", bad)
         self.assertEqual(self.b.sources("The Long Road"), items)
+
+    def test_source_key_matches_the_form(self):
+        key = books_module.source_key
+        van_dijk = {"author": [{"family": "Dijk", "non-dropping-particle": "van"}], "issued": {"date-parts": [[2019]]}}
+        self.assertEqual(key(van_dijk, set()), "vandijk2019")
+        self.assertEqual(key(van_dijk, {"vandijk2019"}), "vandijk2019b")
+        self.assertEqual(key(van_dijk, {"vandijk2019", "vandijk2019b"}), "vandijk2019c")
+        self.assertEqual(key(van_dijk, {"vandijk2019"} | {"vandijk2019" + chr(98 + n) for n in range(25)}), "vandijk2019-2")
+        self.assertEqual(key({"title": "Het grote boek", "issued": {"date-parts": [[2020]]}}, set()), "grote2020")
+        self.assertEqual(key({"author": [{"family": "Ångström"}]}, set()), "angstrom")
+        self.assertEqual(key({"editor": [{"literal": "The Harbour Press"}], "issued": {"date-parts": [["c. 1999"]]}}, set()),
+                         "theharbourpress1999")
+        self.assertEqual(key({}, set()), "source")
+        self.assertTrue(manuscript.CITE_KEY.fullmatch(key({"title": "!!!"}, set())))
+
+    def test_add_source(self):
+        self.book()
+        item = {"title": "Harbour Lights", "author": [{"family": "Dijk", "non-dropping-particle": "van", "given": "Anna"}],
+                "issued": {"date-parts": [[2019]]}, "DOI": "10.1000/ABC"}
+        added = self.b.add_source("The Long Road", item)
+        self.assertEqual((added["id"], added["type"]), ("vandijk2019", "book"))
+        self.assertEqual(self.b.sources("The Long Road"), [added])
+        other = self.b.add_source("The Long Road", {"title": "Other Water", "author": item["author"],
+                                                     "issued": {"date-parts": [[2019]]}})
+        self.assertEqual(other["id"], "vandijk2019b")
+        for dup, word in (({"id": "vandijk2019", "title": "x"}, "vandijk2019"),
+                          ({"title": "Different", "DOI": "10.1000/abc"}, "vandijk2019"),
+                          ({"title": "Different", "URL": "http://a.example/x"}, None),
+                          ({"title": "  harbour   LIGHTS ", "issued": {"date-parts": [[2019, 5]]}}, "vandijk2019")):
+            if word is None:
+                self.b.add_source("The Long Road", {"title": "Web", "URL": "http://a.example/x"})
+            with self.assertRaises(BooksError, msg=str(dup)) as cm:
+                self.b.add_source("The Long Road", dup)
+            self.assertEqual(cm.exception.code, 400)
+            if word:
+                self.assertIn(word, str(cm.exception))
+        self.assertEqual(self.b.add_source("The Long Road", {"title": "Harbour Lights", "issued": {"date-parts": [[2020]]}})["id"],
+                         "harbour2020")
+        for bad in ({"title": ""}, {"title": 3}, {}, "x"):
+            with self.assertRaises(BooksError, msg=str(bad)):
+                self.b.add_source("The Long Road", bad)
+        written = json.loads((self.lib / "Books" / "The Long Road" / "sources.json").read_text(encoding="utf-8"))
+        self.assertEqual([i["id"] for i in written], ["vandijk2019", "vandijk2019b", "web", "harbour2020"])
+
+    def test_add_source_refuses_an_id_that_is_not_text(self):
+        self.book()
+        f = self.lib / "Books" / "The Long Road" / "sources.json"
+        for bad in (5, ["a"], {"a": 1}, True):
+            with self.assertRaises(BooksError, msg=str(bad)) as cm:
+                self.b.add_source("The Long Road", {"id": bad, "title": "Fresh"})
+            self.assertEqual(cm.exception.code, 400)
+            self.assertIn("id", str(cm.exception))
+        self.assertFalse(f.exists() and json.loads(f.read_text(encoding="utf-8")))
+        f.write_text(json.dumps([{"id": ["x"], "title": "Odd"},
+                                 {"id": "ok", "title": "Fine", "issued": {"date-parts": [[1990]]}}]), encoding="utf-8")
+        with self.assertRaises(BooksError) as cm:           # a plain refusal, not a TypeError
+            self.b.add_source("The Long Road", {"title": "Fresh"})
+        self.assertEqual(cm.exception.code, 400)
+        with self.assertRaises(BooksError):
+            self.b.add_source("The Long Road", {"id": "ok", "title": "Again"})
+
+    def test_add_source_never_writes_over_an_unreadable_file(self):
+        self.book()
+        f = self.lib / "Books" / "The Long Road" / "sources.json"
+        for raw in (b"\xff\xfe\x00bad", b"{not json", b'{"a": 1}'):
+            f.write_bytes(raw)
+            with self.assertRaises(BooksError) as cm:
+                self.b.add_source("The Long Road", {"title": "Fresh"})
+            self.assertEqual(cm.exception.code, 400)
+            self.assertIn("sources.json can't be read", str(cm.exception))
+            self.assertEqual(f.read_bytes(), raw)
+
+    def test_index_terms(self):
+        self.book()
+        files = [e["file"] for e in self.b._pieces(self.b._dir("The Long Road"))]
+        self.write_md("The Long Road", files[0],
+                      "# One\n\nThe [the harbour]{.idx term=\"harbour\"} and [Harbour]{.idx} again, "
+                      "[the *old* pier]{.idx term=\"pier\"} and [old]{.idx term=\"pier\"}.\n\n"
+                      "> [a quiet *Harbour*]{.idx}\n")
+        self.write_md("The Long Road", files[1], "# Two\n\n[harbour]{.idx term=\"Harbour\"} and [Zed]{.idx}.\n")
+        terms = self.b.index_terms("The Long Road")
+        self.assertEqual([t["term"] for t in terms], ["a quiet Harbour", "Harbour", "harbour", "pier", "Zed"])
+        by = {t["term"]: t for t in terms}
+        self.assertEqual((by["harbour"]["count"], by["harbour"]["pieces"]), (1, [files[0]]))
+        self.assertEqual((by["Harbour"]["count"], by["Harbour"]["pieces"]), (2, files))
+        self.assertEqual((by["pier"]["count"], by["Zed"]["pieces"]), (2, [files[1]]))
 
     def test_save_image_names_are_unique_and_safe(self):
         self.book()

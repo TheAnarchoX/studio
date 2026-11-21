@@ -14,6 +14,7 @@ from typing import Callable
 
 from . import config, styles
 from .books import Books
+from .research import Research
 from .store import StoreError, folder_name, write_text
 
 SERIES = "Examples"
@@ -203,6 +204,23 @@ and see how it holds.
 """),
 ]
 
+# the example book's board (part 3): a frame "Ideas" holding a note, the book's own source and a quote citing it
+BOARD_FRAME = {"title": "Ideas", "x": 0, "y": 0, "w": 880, "h": 420}
+BOARD_NOTE = {"type": "note", "title": "Things to keep", "text": "Gates, puddles, soup. Write down the small thing "
+              "first and let the large one follow.", "tags": ["example"]}
+BOARD_QUOTE = {"type": "quote", "source": "field-notes", "locator": "p. 4", "tags": ["example"],
+               "text": "Small habits are what carry a long piece of work."}
+
+
+def _add_board(books, book_id):
+    """The example book's board: a frame, a note, the source `field-notes` and a quote citing it, all in the frame."""
+    research = Research(books.root.parent)
+    research.layout(book_id, frames=[BOARD_FRAME])
+    frame = research.read(book_id)["frames"][0]["id"]
+    research.add(book_id, BOARD_NOTE, frame=frame)
+    research.add(book_id, {"type": "source", "text": "Invented for this example.", "csl": SOURCES[0]}, frame=frame)
+    research.add(book_id, BOARD_QUOTE, frame=frame)
+
 
 def _example_books(books):
     out = []
@@ -236,8 +254,10 @@ def add_book(books):
         contents += [{"file": e["file"], "kind": e["kind"], "form": e["form"], "status": "final"} for e in pieces[:1]]
         contents.append({"auto": "toc"})
         contents += [{"file": e["file"], "kind": e["kind"], "form": e["form"], "status": "final"} for e in pieces[1:]]
-        contents += [{"auto": a} for a in ("notes", "bibliography")]
-        books.update(book["id"], {"features": {"sources": True}, "contents": contents})
+        contents += [{"auto": a} for a in ("notes", "bibliography", "index")]
+        books.update(book["id"], {"features": {"sources": True, "index": True}, "contents": contents,
+                                  "design": {"template": "literary"}})
+        _add_board(books, book["id"])
     except BaseException:
         shutil.rmtree(d, ignore_errors=True)     # made by this call's create a moment ago
         raise

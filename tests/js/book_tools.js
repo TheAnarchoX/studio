@@ -124,6 +124,47 @@ const pdoc = {type: "doc", attrs: {form: "prose"}, content: [
   {type: "poem", attrs: {src: "Zee/Eb"}}]};
 eq("the text of a piece, block by block", T.plainBlocks(pdoc), ["Titel", "Tekst^[noot] [zie @key, p. 3] meer\nregel", "* * *", "Citaat", "Image: Strand", "Linked poem: Zee/Eb"]);
 
+// list items and aligned text are text containers, in reading order
+const ldoc = node({type: "doc", attrs: {form: "prose"}, content: [
+  {type: "list_item", attrs: {list: "bullet", level: 0, start: 1}, content: [{type: "text", text: "Een appel"}]},
+  {type: "list_item", attrs: {list: "bullet", level: 0, start: 1}, content: [{type: "text", text: "Twee appels"}, {type: "note", content: [{type: "text", text: "noot"}]}]},
+  {type: "aligned", attrs: {align: "center"}, content: [{type: "paragraph", content: [{type: "text", text: "Drie appels"}]}]}]});
+eq("containersOf: list items and aligned paragraphs", T.containersOf(ldoc, "nl").map(b => [b.kind, b.text]),
+  [["text", "Een appel"], ["text", "Twee appels￼"], ["note", "noot"], ["text", "Drie appels"]]);
+eq("history: list items and aligned paragraphs", T.plainBlocks({type: "doc", content: [
+  {type: "list_item", attrs: {list: "bullet", level: 0, start: 1}, content: [{type: "text", text: "Een appel"}]},
+  {type: "aligned", attrs: {align: "right"}, content: [{type: "paragraph", content: [{type: "text", text: "Twee"}]}]}]}), ["Een appel", "Twee"]);
+
+// table cells are text containers, row by row and cell by cell, each followed by its notes
+const tcell = (...content) => content.length ? {type: "table_cell", content} : {type: "table_cell"};
+const ttext = text => ({type: "text", text});
+const tjson = {type: "doc", attrs: {form: "prose"}, content: [
+  {type: "paragraph", content: [ttext("Voor")]},
+  {type: "table", attrs: {header: true, align: [null, "right"]}, content: [
+    {type: "table_row", content: [tcell(ttext("Stad")), tcell(ttext("Fruit"))]},
+    {type: "table_row", content: [tcell(ttext("Utrecht")), tcell(ttext("twee appels"), {type: "note", content: [ttext("Rode appels.")]})]},
+    {type: "table_row", content: [tcell(), tcell(ttext("drie"))]}]}]};
+let tdoc = null, tboxes = [];
+try { tdoc = node(tjson); tboxes = T.containersOf(tdoc, "nl"); } catch (e) { failures.push({name: "table document", got: String(e.message || e), want: "a table"}); }
+eq("containersOf: table cells in reading order", tboxes.map(b => [b.kind, b.text]),
+  [["text", "Voor"], ["text", "Stad"], ["text", "Fruit"], ["text", "Utrecht"], ["text", "twee appels" + T.GAP], ["note", "Rode appels."],
+   ["text", ""], ["text", "drie"]]);
+eq("containersOf: a cell's position is the cell's", tboxes.map(b => tdoc.nodeAt(b.pos).type.name),
+  ["paragraph", "table_cell", "table_cell", "table_cell", "table_cell", "note", "table_cell", "table_cell"]);
+eq("containersOf: offsets in a cell", tboxes.length > 4 ? tdoc.textBetween(tboxes[4].at[5], tboxes[4].at[11]) : null, "appels");
+eq("history: a table row by row, its cells joined", T.plainBlocks(tjson), ["Voor", "Stad | Fruit", "Utrecht | twee appels^[Rode appels.]", " | drie"]);
+
+// math is no text to find (one gap, like a citation); the history shows its source as Markdown writes it
+const mjson = {type: "doc", attrs: {form: "prose"}, content: [
+  {type: "paragraph", content: [ttext("De som "), {type: "math", attrs: {tex: "a+b"}}, ttext(" klopt"),
+    {type: "note", content: [ttext("Met "), {type: "math", attrs: {tex: "c"}}]}]},
+  {type: "math_display", attrs: {tex: "\\int x\ndx"}}]};
+let mdoc = null;
+try { mdoc = node(mjson); } catch (e) { failures.push({name: "math document", got: String(e.message || e), want: "math"}); }
+eq("containersOf: math is a gap", mdoc ? T.containersOf(mdoc, "nl").map(b => [b.kind, b.text]) : null,
+  [["text", "De som " + T.GAP + " klopt" + T.GAP], ["note", "Met " + T.GAP]]);
+eq("history: math as its source", T.plainBlocks(mjson), ["De som $a+b$ klopt^[Met $c$]", "$$\\int x\ndx$$"]);
+
 // the outline of a piece
 const odoc = node({type: "doc", attrs: {form: "prose"}, content: [
   {type: "title", content: [{type: "text", text: "T"}]},
@@ -178,6 +219,47 @@ eq("room: refusals in plain sentences", [T.noRoom("split", {panel: true}), T.noR
   "There isn't room for the panel beside two pieces at this width. Close the second pane, or widen the window.",
   "There isn't room for the rhythm's bars at this width. Close the panel or the second pane, or widen the window.",
   "There isn't room for the list of pieces at this width. Close the panel or the second pane, or widen the window."]);
+
+// the second pane's slot (task 10): a second piece or the pages beside the text, one at a time
+eq("slot: the pages take the place of a second piece", T.pairedPane("pages", "split"), "split");
+eq("slot: a second piece takes the place of the pages", T.pairedPane("split", "pages"), "pages");
+eq("slot: free, or holding it already: nothing goes", [T.pairedPane("pages", null), T.pairedPane("pages", "pages"), T.pairedPane("split", "split"), T.pairedPane("split", undefined)], [null, null, null, null]);
+eq("room: the pages", [T.noRoom("pages", {panel: true}), T.noRoom("pages", {})], [
+  "There isn't room for the pages beside the text at this width. Close the panel, or widen the window.",
+  "There isn't room for the pages beside the text at this width. Widen the window."]);
+eq("room: the panel beside the pages", T.noRoom("panel", {pages: true}),
+  "There isn't room for the panel beside the text and the pages at this width. Close the pages, or widen the window.");
+eq("room: the split and panel copy is unchanged by the pages", [T.noRoom("split", {panel: true}), T.noRoom("panel", {split: true})], [
+  "There isn't room for two pieces beside the panel at this width. Close the panel, or widen the window.",
+  "There isn't room for the panel beside two pieces at this width. Close the second pane, or widen the window."]);
+// the spread in view, by its page numbers (a blank page has none; two blank pages say where they are in the book)
+const folios = ["", "", "1", "2", "3", "", "5"].map(folio => ({folio}));
+eq("pages: where, in spreads", [0, 1, 2, 3, 4, 5, 6].map(i => T.pagesWhere(folios, i)),
+  ["Page 1 of 7", "Page 1", "Page 1", "Pages 2–3", "Pages 2–3", "Page 5", "Page 5"]);
+eq("pages: two blank pages", T.pagesWhere([{folio: ""}, {folio: ""}, {folio: ""}], 1), "Pages 2–3 of 3");
+eq("pages: one at a time", T.pagesWhere(folios, 3, false), "Page 2");
+eq("pages: where, nothing", [T.pagesWhere([], 0), T.pagesWhere(folios, -1), T.pagesWhere(folios, 9)], ["", "", ""]);
+// the Keys and tools sheet: the window's own tools, then the format commands that have a key and aren't listed yet
+const own = [["Tools", [["Commands", "Ctrl+K", "Go to a piece"]]], ["Writing", [["Bold", "Ctrl+B", ""], ["Italic", "Ctrl+I", ""]]]];
+const format = [{id: "heading", label: "Heading", key: "Ctrl+Alt+2", group: "Text"}, {id: "quotation", label: "Quotation", key: null, group: "Text"},
+  {id: "strong", label: "Bold", key: "Ctrl+B", group: "Style"}, {id: "underline", label: "Underline", key: "Ctrl+U", group: "Style"}];
+eq("keys: the window's own, then the format commands", T.keyGroups(own, format),
+  [...own, ["Formatting", [["Heading", "Ctrl+Alt+2", "Text"], ["Underline", "Ctrl+U", "Style"]]]]);
+eq("keys: without the format commands", [T.keyGroups(own, undefined), T.keyGroups(own, [])], [own, own]);
+// the rail's row names the panels this book has (a list of names in BOOK_KEYS), its "keys" are plain words
+const rail = [["Tools", [[["Outline", "Sources", "History", "Comments"], "", "The rail's panels", "Their icons, on the right"], ["Find", "Ctrl+F", ""]]]];
+eq("keys: the rail's panels, all when the book isn't known", T.keyGroups(rail)[0][1][0], ["Outline, Sources, History, Comments", "", "The rail's panels", "Their icons, on the right"]);
+eq("keys: the rail's panels this book has", T.keyGroups(rail, [], ["Outline", "History", "Comments", "Find and replace"])[0][1][0][0], "Outline, History, Comments");
+eq("keys: no such panels, no row", T.keyGroups(rail, [], ["Find and replace"])[0][1].map(r => r[0]), ["Find"]);
+
+// fix round 1 (task 10): the rail's names beside its icons give way first, before the list of pieces
+const labelled = table => s => table[[s.labels ? "labels" : "", s.binder ? "list" : "", s.tight ? "tight" : ""].filter(Boolean).join("+") || "plain"];
+eq("room: the rail's names first", T.giveWay(labelled({"labels+list": 300, "list": 380}), {binder: true, rhythm: false, labels: true}),
+  {state: {binder: true, tight: false, compact: false}, fits: true});
+eq("room: the names shown when they fit", T.giveWay(labelled({"labels+list": 400}), {binder: true, rhythm: false, labels: true}),
+  {state: {binder: true, tight: false, compact: false, labels: true}, fits: true});
+eq("room: then the list, and every later step without the names", T.giveWay(labelled({"labels+list": 200, "list": 300, "plain": 330, "tight": 420}), {binder: true, rhythm: false, labels: true}),
+  {state: {binder: false, tight: true, compact: false}, fits: true});
 
 // the rhythm (fix round 2): one scale, 1 px a word; 40 words at most (20 when compact); a gutter of at most 56 px
 eq("rhythm: a bar per word count", [1, 12, 40, 75].map(n => T.rhythmBar(n)), [1, 12, 40, 40]);

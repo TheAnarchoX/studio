@@ -1,0 +1,43 @@
+/* Tables in the writing window (book-table.js): the table looks like the book's text. Hairlines between rows, the
+   header row in Studio's label style, no fills and no vertical rules; each cell takes its column's alignment (data-align,
+   book-table.js's decorations); cells at least 4em wide. Wider than the text column the table scrolls sideways inside it,
+   never widening the column. The first column's text stands on the column's left edge, as the text around it. The quiet
+   Table button stands over the table's top right while the cursor is in the table. Loaded after app.css and book.css;
+   Studio's tokens only, so light and dark follow app.css's theme. Horizontal padding is in px (the page sets the book in
+   19px), so the header's smaller label keeps the body's text edges. */
+
+/* ——— the table and its wrapper ——— */
+.bk-text .bk-tablew{position:relative;margin:1.4em 0 1.1em}
+.bk-text>table.bk-table{margin:1.4em 0 1.1em}             /* without the node view */
+.bk-tablew>.bk-table-s{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.bk-text table.bk-table{width:100%;border-collapse:collapse;border-spacing:0;font-variant-numeric:tabular-nums}
+
+/* ——— cells: the book's text, a little closer set, aligned by their column. The table's right text edge is 2px inside
+   the column: a right-aligned label's last letter-space (.18em of 11px) hangs into it. ——— */
+.bk-text table.bk-table td{padding:.4em 14px;border:0;vertical-align:baseline;text-align:start;line-height:1.45}
+.bk-text table.bk-table td:first-child{padding-left:0}
+.bk-text table.bk-table td:last-child{padding-right:2px}
+/* at least 4em of text in every cell (min-width doesn't hold for table cells): a strut under the text */
+.bk-text table.bk-table td::after{content:"";display:block;width:4em;height:0}
+.bk-text table.bk-table td[data-align=left]{text-align:left}
+.bk-text table.bk-table td[data-align=center]{text-align:center}
+.bk-text table.bk-table td[data-align=right]{text-align:right}
+
+/* ——— hairlines between rows; the one under the header a step firmer ——— */
+.bk-text table.bk-table tr+tr>td{border-top:1px solid var(--line-mid)}
+.bk-text table.bk-table[data-header=true] tr:nth-child(2)>td{border-top-color:var(--line)}
+
+/* ——— the header row: Studio's label (app.css .label), on the row's foot ——— */
+.bk-text table.bk-table[data-header=true] tr:first-child>td{padding-top:0;padding-bottom:9px;vertical-align:bottom;
+  font:600 11px/1.3 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--fog)}
+.bk-text table.bk-table[data-header=true] tr:first-child>td::after{width:76px}          /* the body's 4em */
+/* a label's last letter-space stands after its ink: centred and right-aligned labels take it back from the padding */
+.bk-text table.bk-table[data-header=true] tr:first-child>td:is([data-align=center],[data-align=right]){padding-right:calc(14px - .18em)}
+.bk-text table.bk-table[data-header=true] tr:first-child>td:is([data-align=center],[data-align=right]):last-child{padding-right:calc(2px - .18em)}
+
+/* ——— the Table button: quiet (.btn.small.quiet), over the table's top right, its ink on the table's right text edge
+   (past its 1px border and its last letter-space); only while the cursor is in the table, never while the piece is
+   locked ——— */
+.bk-tablew>.bk-table-b{position:absolute;right:calc(1px - .14em);bottom:100%;margin-bottom:3px;padding:4px 0 4px 10px;visibility:hidden}
+.bk-tablew.bk-table-on>.bk-table-b{visibility:visible}
+.bk-text[contenteditable=false] .bk-table-b{visibility:hidden}

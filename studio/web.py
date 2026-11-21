@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .books import Books
 from . import config, examples, fonts, home, metrics, routes, shoot, updater
+from . import backup
 from .store import STATUSES, Store, StoreError
 
 STATIC = Path(__file__).parent / "static"
@@ -321,6 +322,7 @@ def serve(open_browser=False, host=None, port=None, store=None, quiet=False):
     if not quiet:
         print(f"Studio: {url}  (poems in {Handler.store.root})  Ctrl+C to stop", file=sys.stderr)
     threading.Thread(target=updater.check, daemon=True).start()
+    backup.start_scheduler()
     fonts.registry().start_system_index()      # cached on disk, so cheap after the first time
     if open_browser:
         webbrowser.open(url)
@@ -332,4 +334,6 @@ def serve(open_browser=False, host=None, port=None, store=None, quiet=False):
         httpd.server_close()
 
 
-from . import routes_books, routes_making, routes_styles, routes_update  # noqa: F401,E402
+from . import routes_books, routes_compose, routes_making, routes_styles, routes_update  # noqa: F401,E402
+from . import routes_research  # noqa: F401,E402  part 3: research board
+from . import routes_library  # noqa: F401,E402

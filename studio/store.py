@@ -815,6 +815,12 @@ class Store:
             if not (folder / f"{p.get('slug', '')}.html").exists():
                 p["slug"] = slugify(title)  # the slug names the renders, so it's fixed once there are any
         self.update(folder, change)
+        gained = writing_log.poem_gain(old_lines, lines)
+        if gained:
+            try:
+                writing_log.add(folder, gained)
+            except OSError:
+                pass  # a log failure never fails the save
         return self.read(folder)
 
     def delete_poem(self, ref):
@@ -875,3 +881,4 @@ class Store:
 
 
 from . import styles  # noqa: E402  (last: styles imports StoreError and write_text from this module)
+from . import writing_log  # noqa: E402

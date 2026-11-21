@@ -15,6 +15,18 @@
 <link rel="stylesheet" href="/static/editor.css">
 <link rel="stylesheet" href="/static/book.css">
 <link rel="stylesheet" href="/static/book-tools.css">
+<!-- part 3: the research board -->
+<link rel="stylesheet" href="/static/board.css">
+<link rel="stylesheet" href="/static/board-rail.css">
+<!-- part 3: the board's canvas -->
+<link rel="stylesheet" href="/static/board-canvas.css">
+<link rel="stylesheet" href="/static/library.css">
+<link rel="stylesheet" href="/static/book-format.css">
+<link rel="stylesheet" href="/static/book-panel.css">
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/static/book-math.css">
+<link rel="stylesheet" href="/static/book-table.css">
+<link rel="stylesheet" href="/static/book-compose.css">
 </head>
 <body>
 <header class="top">
@@ -23,6 +35,8 @@
     <a href="#/" data-nav="home">Home</a>
     <a href="#/poems" data-nav="poems">Poems</a>
     <a href="#/books" data-nav="books">Books</a>
+    <!-- part 3: the shared research board -->
+    <a href="#/research" data-nav="research">Research</a>
   </nav>
   <span class="spacer"></span>
   <nav class="nav nav-right" aria-label="Studio">
@@ -30,6 +44,7 @@
     <a href="#/info" data-nav="info">Info</a>
     <a href="#/settings" data-nav="settings">Settings</a>
   </nav>
+  <button class="btn quiet" id="search" type="button" title="Search the library (Ctrl+K)">Search</button>
   <button class="btn solid" id="new" type="button" aria-haspopup="menu"><span class="plus">+</span><span class="lbl">New</span></button>
 </header>
 <main id="app" tabindex="-1"></main>
@@ -43,11 +58,29 @@
 <script src="/static/styles.js"></script>
 <script src="/static/vendor/prosemirror.js"></script>
 <script src="/static/book-schema.js"></script>
+<script src="/static/book-format.js"></script>
+<script src="/static/book-panel.js"></script>
+<script src="/static/vendor/katex/katex.min.js"></script>
+<script src="/static/book-math.js"></script>
+<script src="/static/book-table.js"></script>
 <script src="/static/book.js"></script>
 <script src="/static/book-text.js"></script>
 <script src="/static/book-editor.js"></script>
 <script src="/static/book-tools.js"></script>
+<script src="/static/book-spell.js"></script>
 <script src="/static/book-rail.js"></script>
+<script src="/static/book-suggest.js"></script>
+<!-- part 3: the research board -->
+<script src="/static/board-core.js"></script>
+<script src="/static/board.js"></script>
+<!-- part 3: the board's canvas -->
+<script src="/static/board-canvas.js"></script>
+<script src="/static/board-rail.js"></script>
+<script src="/static/book-pages.js"></script>
+<script src="/static/book-compose.js"></script>
 <script src="/static/welcome.js"></script>
+<script src="/static/backups.js"></script>
+<script src="/static/writing.js"></script>
+<script src="/static/search.js"></script>
 </body>
 </html>

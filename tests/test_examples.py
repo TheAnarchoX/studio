@@ -143,13 +143,26 @@ class ExamplesTest(unittest.TestCase):
         for e in pieces[1:]:
             self.assertTrue(80 <= e["words"] <= 200, (e["file"], e["words"]))
         self.assertEqual([e["auto"] for e in book["contents"] if e.get("auto")],
-                         ["half-title", "title-page", "copyright", "toc", "notes", "bibliography"])
+                         ["half-title", "title-page", "copyright", "toc", "notes", "bibliography", "index"])
         foreword = self.books.piece(book["id"], pieces[1]["file"])
         self.assertEqual(foreword["notes"], 1)
         self.assertIn("[@field-notes", foreword["md"])
         self.assertEqual(self.books.piece(book["id"], pieces[2]["file"])["md"].count("\n***\n"), 1)
         self.assertIn("]{.idx}", self.books.piece(book["id"], pieces[2]["file"])["md"])
         self.assertEqual(self.books.piece(book["id"], pieces[4]["file"])["doc"]["attrs"], {"form": "poem"})
+
+    def test_example_book_sets(self):
+        """The example book is set in the composer: it compiles, has an even page count, a design of its own and
+        every generated page, the index included."""
+        from studio import compose
+        examples.add_book(self.books)
+        book = self.books.read("A Year of Small Things")
+        self.assertEqual(book["design"]["template"], "literary")
+        self.assertIn("index", [e["auto"] for e in book["contents"] if e.get("auto")])
+        c = compose.compile_book(self.books, book["id"])
+        self.assertIsNone(c.error)
+        self.assertEqual(len(c.svgs) % 2, 0)
+        self.assertTrue(c.ctx.terms)
 
     def test_the_books_pieces_are_canonical(self):
         examples.add_book(self.books)
@@ -160,6 +173,22 @@ class ExamplesTest(unittest.TestCase):
                 self.assertEqual(manuscript.serialize(manuscript.parse(md, e.get("form", "prose")), e.get("form", "prose")), md)
         self.assertEqual(self.books.read(book["id"])["example"], True)
         self.assertTrue(json.loads((self.books.dir(book["id"]) / "sources.json").read_text(encoding="utf-8"))[0]["issued"])
+
+    def test_example_book_has_a_board(self):
+        from studio.research import Research
+        examples.add_book(self.books)
+        board = Research(self.tmp).read("A Year of Small Things")
+        self.assertEqual(sorted(i["type"] for i in board["items"]), ["note", "quote", "source"])
+        self.assertEqual(len(board["frames"]), 1)
+        self.assertEqual(board["frames"][0]["title"], "Ideas")
+        self.assertTrue(all(i["pos"]["frame"] == board["frames"][0]["id"] for i in board["items"]))
+        quote = [i for i in board["items"] if i["type"] == "quote"][0]
+        source = [i for i in board["items"] if i["type"] == "source"][0]
+        self.assertEqual(quote["source"], "field-notes")
+        self.assertEqual(source["csl"]["id"], "field-notes")
+        self.assertTrue(quote["locator"])
+        self.assertEqual(quote["source_label"], "Example 2026, " + quote["locator"])
+        self.assertNotIn("field-notes", quote["source_label"])
 
     def test_adding_the_book_twice_adds_nothing(self):
         self.assertEqual(len(examples.add_book(self.books)), 1)

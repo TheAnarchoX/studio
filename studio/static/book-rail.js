@@ -1,8 +1,9 @@
 "use strict";
 /* The writing window's rail (book-editor.js, book-tools.js): a column of icons on the right and one panel at a time,
-   closed until asked for. Outline (headings, scene breaks and notes of the piece), Sources (sources.json: find, add,
-   edit, cite), History (the piece's snapshots: compare with the text now, restore), Comments, and Find and replace
-   across the book. A panel about a piece follows the pane last written in.
+   closed until asked for; while a panel is open, and there is room, each icon has its panel's name beside it. Outline
+   (headings, scene breaks and notes of the piece), Sources (sources.json: find, add, edit, cite), History (the piece's
+   snapshots: compare with the text now, restore), Comments, Suggestions (Claude's, book-suggest.js), Find and replace
+   across the book, and the research Board (board-rail.js). A panel about a piece follows the pane last written in.
    Find and replace and Restore change files on disk: the open pieces are saved first, made read-only while it runs,
    and read again after (as one change that undo can take back), so no typing is ever replaced under the cursor.
    A classic script after book-tools.js; sets window.BookRail = {mount(W, tools)}. */
@@ -14,8 +15,12 @@
     history: `<circle cx="9" cy="9" r="6.25"/><path d="M9 5.5V9l2.5 1.6"/>`,
     comments: `<path d="M3.25 3.75h11.5v8.5h-6.5l-3.5 2.75v-2.75h-1.5z"/>`,
     find: `<circle cx="7.75" cy="7.75" r="4.5"/><path d="M11 11l4 4"/>`,
+    suggestions: `<path d="M5.5 12.5 9 4.5l3.5 8"/><path d="M3 15h12"/>`,         // the proofreader's caret, on a line
   };
-  const PANELS = [["outline", "Outline"], ["sources", "Sources"], ["history", "History"], ["comments", "Comments"], ["find", "Find and replace"]];
+  const PANELS = [["outline", "Outline"], ["sources", "Sources"], ["history", "History"], ["comments", "Comments"], ["suggestions", "Suggestions"], ["find", "Find and replace"]];
+  /* part 3: the research board beside the text (board-rail.js draws the panel) */
+  ICONS.board = `<path d="M3.25 3.75h5v5.5h-5zM10.25 3.75h4.5v3.5h-4.5zM10.25 9.25h4.5v5h-4.5zM3.25 11.25h5v3h-5z"/>`;
+  PANELS.push(["board", "Board"]);
   const TYPES = [["book", "Book"], ["article-journal", "Article"], ["chapter", "Chapter"], ["webpage", "Web page"], ["report", "Report"]];
   const CONTAINER = {"article-journal": "Journal", chapter: "Book", webpage: "Website"};
   const svg = id => `<svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">${ICONS[id]}</svg>`;
@@ -30,11 +35,11 @@
   function mount(W, tools) {
     const host = W.root.querySelector(".bw-rail");
     host.hidden = false;
-    host.innerHTML = `<section class="br-panel" hidden><header class="br-head"><div class="br-k"><h2 class="kicker"></h2>
-        <button type="button" class="bw-tog br-x" title="Close the panel">Close</button></div><p class="br-t"></p><p class="br-sub"></p></header>
+    host.innerHTML = `<section class="br-panel" hidden><header class="br-head"><div class="br-bar"><button type="button" class="bw-tog br-x" title="Close the panel">Close</button></div>
+        <div class="br-k"><h2 class="kicker"></h2></div><p class="br-t"></p><p class="br-sub"></p></header>
       <div class="br-body"></div></section>
       <nav class="br-icons" aria-label="Rail">${PANELS.map(([id, name]) => `<button type="button" class="br-i" data-panel="${id}" aria-pressed="false"
-        title="${esc(name)}${id === "find" ? " · Ctrl+F" : ""}" aria-label="${esc(name)}">${svg(id)}</button>`).join("")}</nav>`;
+        title="${esc(name)}${id === "find" ? " · Ctrl+F" : ""}" aria-label="${esc(name)}">${svg(id)}<span class="br-l" aria-hidden="true">${esc(name)}</span></button>`).join("")}</nav>`;
     const panel = host.querySelector(".br-panel"), body = host.querySelector(".br-body"), kicker = host.querySelector(".br-head .kicker"), title = host.querySelector(".br-t");
     const sub = host.querySelector(".br-sub"), says = t => { sub.textContent = t; };
     const count = (n, one, many = one + "s") => `${bookCount(n)} ${n === 1 ? one : many}`;
@@ -43,11 +48,19 @@
     const book = () => tools.W.book;
     const piece = () => tools.activePiece();
     const text = () => { const p = piece(); return p && p.text && !p.text.destroyed ? p.text : null; };
-    const available = () => PANELS.filter(([id]) => id !== "sources" || book().features?.sources === true);
+    let SG = null;                      // the Suggestions panel (book-suggest.js), made at the end of mount
+    const available = () => PANELS.filter(([id]) => (id !== "sources" || book().features?.sources === true) && (id !== "suggestions" || (!!SG && !!book().suggestions?.any)));
+    /* the status bar's quiet line while suggestions wait: "4 suggestions", which opens the panel */
+    const sugg = Object.assign(document.createElement("button"), {type: "button", className: "bw-sugg", hidden: true, title: "Open Suggestions"});
+    W.root.querySelector("#bw-counts")?.after(sugg);
+    sugg.addEventListener("click", () => open("suggestions"));
 
     function paintIcons() {
       const ok = new Set(available().map(([id]) => id));
       host.querySelectorAll(".br-i").forEach(b => { b.hidden = !ok.has(b.dataset.panel); b.setAttribute("aria-pressed", String(b.dataset.panel === S.open)); });
+      const waiting = ok.has("suggestions") ? +book().suggestions?.open || 0 : 0;
+      sugg.hidden = !waiting;
+      sugg.textContent = waiting ? count(waiting, "suggestion") : "";
     }
     function open(id, opts = {}) {
       if (!available().some(([x]) => x === id)) return;
@@ -58,6 +71,7 @@
           if (!tools.railOpen(true)) { panel.hidden = true; tools.railOpen(false); return; }      // refused: the room it took is given back
         }
         if (S.open === "find") tools.setFind(null);
+        if (S.open === "suggestions") SG.closed();
         S.open = id;
         panel.hidden = false;
         panel.setAttribute("aria-label", PANELS.find(p => p[0] === id)[1]);
@@ -70,10 +84,12 @@
         const f = body.querySelector(opts.focus === "repl" ? "[data-f=repl]" : "[data-f=q]");
         f?.focus(); f?.select();               // Find is for typing in: the cursor goes to its field however it opened
       } else if (id === "sources" && opts.add) newSource();
+      else if (opts.focus && id === "suggestions") SG.focus();       // the first suggestion, not the switch above the list
       else if (opts.focus) body.querySelector("input, button")?.focus();
     }
     function close() {
       if (S.open === "find") tools.setFind(null);
+      if (S.open === "suggestions") SG.closed();
       const inside = host.contains(document.activeElement);
       S.open = null;
       panel.hidden = true;
@@ -100,11 +116,12 @@
     function head(k, t) { kicker.textContent = k; title.textContent = t; }
     function render() {
       if (!S.open) return;
+      if (S.open === "board") { root.BoardPanel?.render(body, {tools, head, says, book: book()}); return; }      /* part 3: the research board */
       const name = PANELS.find(p => p[0] === S.open)[1], p = piece();
-      if (S.open === "sources" || S.open === "find") head(name, book().title);
+      if (S.open === "sources" || S.open === "find" || S.open === "suggestions") head(name, book().title);
       else head(name, p ? p.name : "");
       says(S.open === "find" ? "Every piece, with its notes and captions" : "");
-      ({outline: renderOutline, sources: renderSources, history: renderHistory, comments: renderComments, find: renderFind})[S.open]();
+      ({outline: renderOutline, sources: renderSources, history: renderHistory, comments: renderComments, suggestions: () => SG.render(), find: renderFind})[S.open]();
     }
     const empty = msg => `<p class="br-empty">${msg}</p>`;
 
@@ -536,8 +553,8 @@
     }
 
     /* Changes on disk while pieces are open (BookTools.guarded): every editor and field of them locked, saved first, read
-       again after; saves of pieces left a moment ago land first. */
-    const guarded = (pieces, run, by) => BX.guarded(pieces, run, {settled: BookEditor.settled, by});
+       again after; saves of pieces left a moment ago land first. how: who changed it ("replace"), or {by, keep}. */
+    const guarded = (pieces, run, how) => BX.guarded(pieces, run, {settled: BookEditor.settled, ...(typeof how === "string" ? {by: how} : how)});
 
     /* clicks and right-clicks in the panels */
     body.addEventListener("click", e => {
@@ -573,16 +590,20 @@
       if (items) StudioMenu.open(e, items);
     });
 
+    /* ——— Suggestions: book-suggest.js ——— */
+    SG = root.BookSuggest?.panel({body, says, tools, guarded, ask, book, isOpen: () => S.open === "suggestions", open}) || null;
+
     paintIcons();
     return {
       panels: available,
       open,
       close,
-      unmount() { clearTimeout(S.timer); clearTimeout(S.selTimer); host.replaceChildren(); host.hidden = true; },
+      unmount() { if (S.open === "suggestions") SG.closed(); clearTimeout(S.timer); clearTimeout(S.selTimer); sugg.remove(); host.replaceChildren(); host.hidden = true; },
       /* the pane last written in shows another piece */
       pieceChanged() { if (S.open && S.open !== "sources" && S.open !== "find") render(); },
       /* a text changed (doc) or its cursor moved */
       changed(T, doc) {
+        if (S.open === "suggestions") return SG.changed(T, doc);       // any text: the list is the whole book's
         if (!S.open || T !== text()) return;
         if (doc && (S.open === "outline" || S.open === "comments" || S.open === "history")) {
           if (body.contains(document.activeElement)) return;      // not under the author's hands
@@ -596,6 +617,8 @@
         if (S.open === "sources" && !S.form && !body.contains(document.activeElement)) renderSources(true);
         if (S.open === "find" && S.find.q && !S.find.busy) { clearTimeout(S.timer); S.timer = setTimeout(search, 400); }
         if (S.open === "outline" || S.open === "history" || S.open === "comments") head(PANELS.find(p => p[0] === S.open)[1], piece()?.name || "");
+        if (S.open === "suggestions") { head("Suggestions", book().title); SG.refresh(); }
+        if (S.open === "board") root.BoardPanel?.refresh?.();       /* part 3: the research board */
       },
       /* a save went through; one with a snapshot adds to History */
       saved(p, r) { if (r.snapshot && S.open === "history" && p === piece() && S.history) { S.history.list = null; renderHistory(); } },

@@ -14,7 +14,7 @@ from . import config, fonts
 from .store import DESIGN_FORMATS, RENDERS, StoreError
 
 
-def screenshot(url, w, h, out: Path, scale=2):
+def screenshot(url, w, h, out: Path, scale=2, flags=(), timeout=120):     # part 3: flags (before the URL), timeout
     if not config.CHROME:
         raise RuntimeError("no Chrome, Chromium or Edge found to render with; set one in Studio's settings")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -24,7 +24,7 @@ def screenshot(url, w, h, out: Path, scale=2):
         subprocess.run([config.CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
                         "--no-default-browser-check", f"--user-data-dir={profile}", f"--force-device-scale-factor={scale}",
                         f"--window-size={w},{h}", "--virtual-time-budget=12000", "--run-all-compositor-stages-before-draw",
-                        f"--screenshot={tmp}", url], check=True, capture_output=True, timeout=120,
+                        f"--screenshot={tmp}", *flags, url], check=True, capture_output=True, timeout=timeout,
                        creationflags=0x08000000 if sys.platform == "win32" else 0)
         tmp.replace(out)
     finally:

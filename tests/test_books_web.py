@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import quote
 
-from studio import config
-from studio.books import AUTO, FORMS, KINDS, PIECE_KINDS
+from studio import config, suggestions
+from studio.books import AUTO, FORMS, KINDS, PIECE_KINDS, Books
 from tests.support import temp_studio
 
 STATIC = Path(__file__).resolve().parent.parent / "studio" / "static"
@@ -160,7 +160,7 @@ class BooksWebTest(unittest.TestCase):
             with urllib.request.urlopen(req) as r:
                 self.assertEqual(r.headers["Content-Disposition"],
                                  "attachment; filename=\"Een week.md\"; filename*=UTF-8''%C3%89%C3%A9n%20week.md")
-            self.assertEqual(st.post("/api/book/export", {"b": bid, "format": "pdf"})[0], 400)
+            self.assertEqual(st.post("/api/book/export", {"b": bid, "format": "rtf"})[0], 400)
             self.assertEqual(st.post("/api/book/export", {"b": "nope", "format": "md"})[0], 404)
             self.assertEqual(st.get(f"/api/book/export?b={quote(bid)}&format=md")[0], 404)       # no export by GET
             foreign = urllib.request.Request(st.url + "/api/book/export", data=b'{"b": "x", "format": "md"}', method="POST",
@@ -280,6 +280,41 @@ class BooksWebTest(unittest.TestCase):
             self.assertEqual((code, r["style_sheet"]), (200, sheet))
             self.assertEqual(st.get(f"/api/book?b={bid}")[1]["style_sheet"], sheet)
 
+    def test_suggestions_over_http(self):
+        with temp_studio() as st:
+            bid = make(st)["id"]
+            piece = st.post("/api/book/piece/new", {"b": bid, "kind": "chapter", "title": "The Pier"})[1]
+            f = piece["file"]
+            body = {"type": "doc", "content": [piece["doc"]["content"][0],
+                                               doc_of("The harbour wall was cold at dusk.")["content"][0]]}
+            got = st.get(f"/api/book/piece?b={bid}&f={f}")[1]
+            self.assertEqual(st.post("/api/book/piece", {"b": bid, "f": f, "doc": body, "base_mtime": got["mtime"]})[0], 200)
+            made = suggestions.add(Books(config.BOOKS), bid, [
+                {"piece": "The Pier", "kind": "edit", "quote": "harbour wall", "text": "quay"},
+                {"piece": "The Pier", "kind": "comment", "quote": "dusk", "text": "Too soft?"}])
+            self.assertEqual(made["refused"], [])
+            first, second = (s["id"] for s in made["added"])
+            code, listed = st.get(f"/api/book/suggestions?b={bid}")
+            self.assertEqual((code, len(listed)), (200, 2))
+            self.assertEqual(st.get(f"/api/book/suggestions?b={bid}&status=open")[1], listed)
+            self.assertEqual(st.get(f"/api/book/suggestions?b={bid}&status=decided")[1], [])
+            self.assertEqual(st.get(f"/api/book/suggestions?b={bid}&status=nope")[0], 400)
+            code, done = st.post("/api/book/suggestions/decide", {"b": bid, "ids": [first], "decision": "accept"})
+            self.assertEqual((code, done["accepted"]), (200, [first]))
+            self.assertIn("quay", st.get(f"/api/book/piece?b={bid}&f={f}")[1]["md"])
+            code, done = st.post("/api/book/suggestions/decide", {"b": bid, "ids": [second], "decision": "reject"})
+            self.assertEqual((code, done["rejected"]), (200, [second]))
+            decided = st.get(f"/api/book/suggestions?b={bid}&status=decided")[1]
+            self.assertEqual({s["id"] for s in decided}, {first, second})
+            stamps = [s["decided"] for s in decided]
+            self.assertEqual(stamps, sorted(stamps, reverse=True))  # newest first
+            code, err = st.post("/api/book/suggestions/decide", {"b": bid, "ids": [first], "decision": "withdraw"})
+            self.assertEqual(code, 400)
+            self.assertIn("Only Claude withdraws its suggestions.", json.dumps(err))
+            self.assertEqual(st.post("/api/book/suggestions/decide", {"b": bid, "ids": "x", "decision": "accept"})[0], 400)
+            self.assertEqual(st.post("/api/book/suggestions/decide", {"b": bid, "ids": [1], "decision": "accept"})[0], 400)
+            self.assertEqual(st.get(f"/api/book?b={bid}")[1]["suggestions"], {"open": 0, "any": True})
+
     def test_unknown_book_is_404(self):
         with temp_studio() as st:
             self.assertEqual(st.get("/api/book?b=Nope"), (404, {"error": "There's no book called Nope in Books."}))
@@ -322,3 +357,93 @@ class BooksWebTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComposerWebTest(unittest.TestCase):
+    """The composer's endpoints. One server for the class, and the first compile done before any request: it cuts
+    the font instances, which takes longer than the test client waits."""
+
+    @classmethod
+    def setUpClass(cls):
+        import contextlib
+        from studio import compose
+        from studio.books import Books
+        cls._stack = contextlib.ExitStack()
+        cls.st = cls._stack.enter_context(temp_studio())
+        cls.bid = make(cls.st)["id"]
+        cls.st.post("/api/book/piece/new", {"b": cls.bid, "kind": "chapter", "title": "The Pier"})
+        compose.compile_book(Books(config.BOOKS), cls.bid)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._stack.close()
+
+    def test_design_over_http(self):
+        # its own book: a changed design means a recompile, which the pages test must not wait for
+        st = self.st
+        bid = make(st, "Design-Test")["id"]
+        code, got = st.get(f"/api/book/design?b={bid}")
+        self.assertEqual(code, 200)
+        self.assertIn("design", got)
+        self.assertEqual([p["id"] for p in got["printers"]], ["kdp", "ingramspark", "other"])
+        code, set_ = st.post("/api/book/design", {"b": bid, "changes": {"text": {"size": 11}}})
+        self.assertEqual(code, 200, set_)
+        again = st.get(f"/api/book/design?b={bid}")[1]
+        self.assertEqual(again["design"]["text"]["size"], 11)
+        self.assertEqual(again["stored"]["text"]["size"], 11)
+        code, bad = st.post("/api/book/design", {"b": bid, "changes": {"text": {"size": "huge"}}})
+        self.assertEqual(code, 400)
+        self.assertTrue(bad["error"])
+
+    def test_pages_and_page_over_http(self):
+        st, bid = self.st, self.bid
+        code, pages = st.get(f"/api/book/pages?b={bid}")
+        self.assertEqual(code, 200, pages)
+        self.assertEqual(pages["count"], len(pages["pages"]))
+        self.assertGreater(pages["count"], 0)
+        first = pages["pages"][0]
+        h = first["hash"] if isinstance(first, dict) else first
+        req = urllib.request.Request(st.url + f"/api/book/page?h={h}")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.headers["Content-Type"], "image/svg+xml")
+            self.assertEqual(r.headers["Cache-Control"], "public, max-age=31536000, immutable")
+            # opened on its own, a page can run nothing and fetch nothing: its images and glyphs are in it
+            self.assertEqual(r.headers["Content-Security-Policy"],
+                             "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:")
+            svg = r.read()
+            self.assertTrue(svg.lstrip().startswith(b"<svg"))
+            self.assertNotRegex(svg, rb"(?:href|src)=\"(?!#|data:)")      # nothing the policy would block
+        self.assertEqual([x["why"] for x in pages["left"]], ["the book has no endnotes yet"])     # a new memoir
+        self.assertEqual(st.get(f"/api/book/cutting?b={self.bid}"), (200, {"families": []}))
+        self.assertEqual(st.get("/api/book/cutting?b=nope")[0], 404)
+        self.assertEqual(st.get("/api/book/page?h=" + "0" * 40)[0], 404)
+        self.assertEqual(st.get("/api/book/page?h=../x")[0], 404)
+        self.assertEqual(st.get("/api/book/page")[0], 404)
+
+    def test_pdf_export_over_http(self):
+        st, bid = self.st, self.bid
+        req = urllib.request.Request(st.url + "/api/book/export", method="POST",
+                                     data=json.dumps({"b": bid, "format": "pdf"}).encode(),
+                                     headers={"Origin": st.url, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            self.assertEqual(r.headers["Content-Type"], "application/pdf")
+            disp = r.headers["Content-Disposition"]
+            self.assertTrue(disp.startswith("attachment"))
+            self.assertTrue(disp.rstrip('"').endswith(".pdf"), disp)
+            self.assertTrue(r.read().startswith(b"%PDF"))
+
+    def test_preflight_over_http(self):
+        st, bid = self.st, self.bid
+        self.assertEqual(st.get(f"/api/book/preflight?b={bid}")[1], {})
+        code, report = st.post("/api/book/preflight", {"b": bid})
+        self.assertEqual(code, 200, report)
+        self.assertIsInstance(report["items"], list)
+        self.assertEqual(st.get(f"/api/book/preflight?b={bid}")[1], report)
+
+    def test_unknown_book_404(self):
+        st = self.st
+        for method, path in (("get", "/api/book/design?b=nope"), ("get", "/api/book/pages?b=nope"),
+                             ("get", "/api/book/preflight?b=nope")):
+            self.assertEqual(st.get(path)[0], 404, path)
+        self.assertEqual(st.post("/api/book/design", {"b": "nope", "changes": {}})[0], 404)
+        self.assertEqual(st.post("/api/book/preflight", {"b": "nope"})[0], 404)

@@ -8,7 +8,7 @@
   const S = root.BookSchema;
   const {EditorState, EditorView, Plugin, PluginKey, TextSelection, NodeSelection, Selection, Decoration, DecorationSet,
     StepMap, keymap, baseKeymap, history, undo, redo, inputRules, InputRule, wrappingInputRule, textblockTypeInputRule,
-    undoInputRule, toggleMark, chainCommands, dropCursor, gapCursor} = root.PM;
+    undoInputRule, chainCommands, dropCursor, gapCursor} = root.PM;
   const N = S.nodes, M = S.marks;
 
   /* ——— helpers (no DOM) ——— */
@@ -36,12 +36,14 @@
   const WORD = /[\p{L}\p{N}]/u, LONE_CLITIC = /^[(\[„“"«‹]*['’‘](?:s|t|n|k|m|r|ns)$/u;
   const countWords = text => String(text).split(/\s+/).filter(w => w && WORD.test(w) && !LONE_CLITIC.test(w)).length;
   const inlineText = node => { let s = ""; node.forEach(c => { s += c.isText ? c.text : c.type === N.hard_break ? "\n" : ""; }); return s; };
-  /* The words of a piece (manuscript.counts "words"): its blocks without the title; no notes, citations or captions. */
+  /* The words of a piece (manuscript.counts "words"): its blocks without the title, a table's cells row by row; no notes,
+     citations or captions. */
   function docWords(doc) {
     const out = [];
     const block = n => {
-      if (n.type === N.blockquote || n.type === N.epigraph || n.type === N.poem) n.forEach(block);
-      else if (n.type === N.heading || n.type === N.paragraph || n.type === N.attribution) out.push(inlineText(n));
+      if (n.type === N.blockquote || n.type === N.epigraph || n.type === N.poem || n.type === N.aligned) n.forEach(block);
+      else if (n.type === N.heading || n.type === N.paragraph || n.type === N.list_item || n.type === N.attribution) out.push(inlineText(n));
+      else if (n.type === N.table) n.forEach(row => { const cells = []; row.forEach(c => cells.push(inlineText(c))); out.push(cells.join(" | ")); });
     };
     doc.forEach(n => { if (n.type !== N.title) block(n); });
     return countWords(out.join("\n\n"));
@@ -76,24 +78,33 @@
   }
   const CITE_KEY = /^[\p{L}\p{N}_](?:[\p{L}\p{N}_:.#$%&+?~/-]*[\p{L}\p{N}_])?$/u;      // manuscript.CITE_KEY
 
-  /* The / menu: its items (those of a feature the book has switched off are left out), filtered by what is typed after
-     the slash: names starting with it first, then a word starting with it, then any match. */
+  /* The / menu: its items (those of a feature the book has switched off are left out; lists and tables in a piece whose
+     `form` is poem, and the list style `list` the cursor is in already), filtered by what is typed after the slash: names
+     starting with it first, then a word starting with it, then any match. */
   const SLASH = [
     {id: "note", label: "Note", on: f => !!f.notes && f.notes !== "off"},
     {id: "cite", label: "Citation", on: f => f.sources === true},
     {id: "scene", label: "Scene break"}, {id: "epigraph", label: "Epigraph"}, {id: "poem", label: "Poem"},
-    {id: "image", label: "Image"}, {id: "page", label: "Page break"}, {id: "linked", label: "Linked poem"},
+    {id: "image", label: "Image"}, {id: "math", label: "Math"}, {id: "table", label: "Table", prose: true}, {id: "page", label: "Page break"},
+    {id: "linked", label: "Linked poem"},
+    {id: "bullets", label: "Bulleted list", list: "bullet", prose: true}, {id: "numbers", label: "Numbered list", list: "decimal", prose: true},
   ];
-  function slashItems(query, features) {
-    const q = String(query || "").trim().toLowerCase(), items = SLASH.filter(i => !i.on || i.on(features || {}));
+  function slashItems(query, features, form, list = null) {
+    const q = String(query || "").trim().toLowerCase();
+    const items = SLASH.filter(i => (!i.on || i.on(features || {})) && !(i.prose && form === "poem") && !(i.list && i.list === list));
     if (!q) return items;
     const rank = i => { const l = i.label.toLowerCase(); return l.startsWith(q) ? 0 : l.split(/\s+/).some(w => w.startsWith(q)) ? 1 : q.length > 1 && l.includes(q) ? 2 : 9; };
     return items.map(i => [rank(i), i]).filter(([r]) => r < 9).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
   }
-  /* Which bar buttons a book's features allow (Index only for a subject index, not "first-lines"). */
-  const barButtons = f => [["bold", "Bold"], ["italic", "Italic"],
-    ...(f.notes && f.notes !== "off" ? [["note", "Note"]] : []), ...(f.sources === true ? [["source", "Source"]] : []),
-    ...(f.index === true ? [["index", "Index"]] : []), ["comment", "Comment"]];
+  /* Which bar buttons fit the selection, by the book's features (Index only for a subject index, not "first-lines"): in
+     one block of text all of them; across blocks Bold and Italic (a note, a source, an index term and a comment belong to
+     one place); in a note's text Bold, Italic and Source. Format, the format panel, always comes last. */
+  function barButtons(f, {multi = false, inNote = false} = {}) {
+    const one = !multi && !inNote;
+    return [["bold", "Bold"], ["italic", "Italic"],
+      ...(one && f.notes && f.notes !== "off" ? [["note", "Note"]] : []), ...((one || inNote) && f.sources === true ? [["source", "Source"]] : []),
+      ...(one && f.index === true ? [["index", "Index"]] : []), ...(one ? [["comment", "Comment"]] : []), ["format", "Format"]];
+  }
 
   /* The comments of a document as ranges: neighbouring text with the same comment mark is one comment. */
   function commentRanges(doc) {
@@ -160,9 +171,9 @@
     dispatch?.(state.tr.insertText(NBSP + NBSP).scrollIntoView());
     return true;
   }
-  /* A slice pasted (or dropped) into a poem line: the spaces and tabs at the start of each of its lines as no-break
-     spaces. Its first line continues the line it goes into when the slice is open there, so it counts only when that
-     line has nothing before it yet. */
+  /* A slice pasted (or dropped) into a poem line: its list items as lines led by their marker (a poem holds no list),
+     and the spaces and tabs at the start of each of its lines as no-break spaces. Its first line continues the line it
+     goes into when the slice is open there, so it counts only when that line has nothing before it yet. */
   function poemPasted(slice, lineStart) {
     let first = true;
     const walk = frag => {
@@ -185,7 +196,84 @@
       });
       return root.PM.Fragment.from(out);
     };
-    return new root.PM.Slice(walk(slice.content), slice.openStart, slice.openEnd);
+    const lines = root.BookFormat ? root.BookFormat.itemsAsLines(slice.content, slice.openStart) : slice.content;
+    return new root.PM.Slice(walk(lines), slice.openStart, slice.openEnd);
+  }
+  /* A slice's tables as lines: a paragraph per row, its cells joined by " | " (a poem holds no table). A table the slice
+     is open into gives lines open at one depth. */
+  function tablesAsLines(slice) {
+    const c = slice.content;
+    if (!c.content.some(n => n.type === N.table)) return slice;
+    const out = [];
+    c.forEach(n => {
+      if (n.type !== N.table) { out.push(n); return; }
+      n.forEach(row => {
+        const kids = [];
+        row.forEach((cell, _, i) => { if (i) kids.push(S.text(" | ")); cell.forEach(k => kids.push(k)); });
+        out.push(N.paragraph.create(null, kids));
+      });
+    });
+    const open = (n, depth) => (n.type === N.table ? Math.min(depth, 1) : depth);
+    return new root.PM.Slice(root.PM.Fragment.from(out), open(c.firstChild, slice.openStart), open(c.lastChild, slice.openEnd));
+  }
+  /* A slice as one line of a table's cell (a cell holds one line): its text blocks joined by a space, a table row's
+     cells (or the cells of a row the slice is open into) by " | ", line breaks as spaces, display math as inline math,
+     blocks without text (an image, a break) left out. A paragraph slice open at both ends, so it runs into the cell's
+     text; an empty slice when nothing is left. */
+  function cellLine(slice) {
+    const lines = [], one = c => (c.type === N.hard_break ? S.text(" ", c.marks) : c), inline = n => n.content.content.map(one);
+    const cells = cs => cs.flatMap((c, i) => (i ? [S.text(" | "), ...inline(c)] : inline(c)));
+    const walk = frag => {
+      let run = null;                      // the line being made of the cells, or the inline nodes, side by side at this level
+      frag.forEach(n => {
+        const kind = n.type === N.table_cell ? "cells" : n.isInline ? "inline" : null;
+        if (!kind) run = null;
+        else if (run && run.kind === kind) { run.kids.push(...(kind === "cells" ? [S.text(" | "), ...inline(n)] : [one(n)])); return; }
+        else { lines.push((run = {kind, kids: kind === "cells" ? inline(n) : [one(n)]}).kids); return; }
+        if (n.type === N.table_row) lines.push(cells(n.content.content));
+        else if (n.isTextblock) lines.push(inline(n));
+        else if (n.type === N.math_display) lines.push([N.math.create({tex: n.attrs.tex})]);
+        else walk(n.content);              // a table's rows, a quotation's paragraphs; an image or a break has none
+      });
+    };
+    walk(slice.content);
+    const kids = lines.filter(l => l.length).flatMap((l, i) => (i ? [S.text(" "), ...l] : l));
+    return kids.length ? new root.PM.Slice(root.PM.Fragment.from(N.paragraph.create(null, kids)), 1, 1) : root.PM.Slice.empty;
+  }
+  /* A drop into a table's cell (the view's handleDrop): what is dropped comes in as one line of the cell under the
+     pointer (cellLine), a move taking the dragged selection away. Nothing is dropped when nothing of it is text (an
+     image), or when the dragged selection runs across cells. False when the pointer isn't over a cell. */
+  function cellDrop(view, e, slice, moved) {
+    const at = view.posAtCoords({left: e.clientX, top: e.clientY});
+    if (!at) return false;
+    const doc = view.state.doc, inside = at.inside >= 0 ? doc.nodeAt(at.inside) : null;
+    let pos = at.pos;
+    if (doc.resolve(pos).parent.type !== N.table_cell) {
+      if (!inside || inside.type !== N.table_cell) return false;
+      pos = at.inside + 1 + inside.content.size;          // on the cell's padding: at the end of its text
+    }
+    const line = cellLine(slice);
+    if (!line.size || (moved && root.BookTable?.across(view.state))) return true;
+    const tr = view.state.tr;
+    if (moved) tr.deleteSelection();
+    const to = tr.mapping.map(pos), n = tr.steps.length;
+    tr.replace(to, to, line);
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, to, tr.mapping.slice(n).map(to))));
+    view.focus();
+    return true;
+  }
+  /* What a paste or a drop at `$at` brings in (the view's transformPasted): a list's end items whole
+     (BookFormat.pastedLists); in a poem line, its lines' indentation (poemPasted); anywhere else in a poem piece, its list
+     items as lines all the same (a poem holds no list). In a poem line and a poem piece a table comes in as lines; in a
+     table's cell everything comes in as one line of it (cellLine). */
+  function pasted(slice, $at) {
+    if ($at.parent.type === N.table_cell) return cellLine(slice);
+    const F = root.BookFormat;
+    if (F) slice = F.pastedLists(slice);
+    if (poemLine($at) || $at.doc.attrs.form === "poem") slice = tablesAsLines(slice);
+    if (poemLine($at)) return poemPasted(slice, atLineStart($at));
+    if (F && $at.doc.attrs.form === "poem") return new root.PM.Slice(F.itemsAsLines(slice.content, slice.openStart), slice.openStart, slice.openEnd);
+    return slice;
   }
   /* Plain text pasted into a poem line keeps its lines (a blank line between stanzas) and their indentation. */
   function poemText(text, marks, lineStart) {
@@ -203,8 +291,8 @@
   }
 
   /* ——— input rules ——— */
-  /* *x* and **x**: the delimiters go and the mark goes on. Checked against the document, so a run that crosses a note
-     (whose text the matcher reads inline) is left alone. */
+  /* *x*, **x** and ~~x~~: the delimiters go and the mark goes on. Checked against the document, so a run that crosses a
+     note (whose text the matcher reads inline) is left alone. */
   const markRule = (re, type, len) => new InputRule(re, (state, m, start, end) => {
     const inner = m[2], from = start + m[0].length - m[1].length;
     if (state.doc.textBetween(from, end, "\n", "￼") !== m[1].slice(0, -1)) return null;
@@ -217,6 +305,7 @@
     return [
       markRule(/(?:^|[^*\p{L}\p{N}\\])(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/u, M.strong, 2),
       markRule(/(?:^|[^*\p{L}\p{N}\\])(\*([^*\s](?:[^*]*[^*\s])?)\*)$/u, M.em, 1),
+      markRule(/(?:^|[^~\p{L}\p{N}\\])(~~([^~\s](?:[^~]*[^~\s])?)~~)$/u, M.strike, 2),
       new InputRule(CLITIC, (state, m, start, end) => {
         const q = start + m[1].length, at = start + m[0].length - m[4].length;
         if (state.doc.textBetween(q, q + 1) !== m[2]) return null;
@@ -226,6 +315,7 @@
       new InputRule(/\.\.\.$/, "…"),
       new InputRule(/–-$/, "—"),
       new InputRule(/--$/, "–"),
+      ...(root.BookMath ? root.BookMath.inputRules() : []),      // $tex$: inline math, in the text and in notes
     ];
   }
   function blockRules(quotes) {
@@ -244,6 +334,7 @@
       }),
       wrappingInputRule(/^>\s$/, N.blockquote),
       textblockTypeInputRule(/^—\s$/, N.attribution),        // — at the start of an epigraph's last paragraph: who said it
+      ...(root.BookFormat ? root.BookFormat.inputRules() : []),      // - , 1. , a. … at a paragraph's start: a list
     ];
   }
 
@@ -251,9 +342,12 @@
   const isLinked = n => !!n && n.type === N.poem && !!n.attrs.src;
   const inPoem = $p => { for (let d = $p.depth; d > 0; d--) if ($p.node(d).type === N.poem) return true; return $p.doc.attrs.form === "poem" && $p.depth === 1 && $p.parent.type === N.paragraph; };
   const SCENE = /^\s*\*\s*\*\s*\*\s*$/;
+  /* Enter on math, first in the chain (book-math.js); nothing without it */
+  const mathEnter = T => (root.BookMath ? root.BookMath.enter(T) : () => false);
 
   /* Enter, for the dialect's blocks: *** becomes a scene break; a title or heading is followed by a paragraph; an empty
-     last paragraph leaves an epigraph, poem or quotation; in a poem Enter is a new line and a second Enter a new stanza. */
+     last paragraph leaves an epigraph, poem, quotation or aligned block; in a poem Enter is a new line and a second Enter a
+     new stanza. (In a list item BookFormat's listEnter comes first.) */
   function enter(state, dispatch, view, T) {
     const sel = state.selection;
     if (sel instanceof NodeSelection) {
@@ -294,7 +388,7 @@
       dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView());
       return true;
     }
-    if (box && [N.epigraph, N.poem, N.blockquote].includes(box.type) && !block.content.size && $cursor.index(d - 1) === box.childCount - 1) {
+    if (box && [N.epigraph, N.poem, N.blockquote, N.aligned].includes(box.type) && !block.content.size && $cursor.index(d - 1) === box.childCount - 1) {
       const boxPos = $cursor.before(d - 1);
       if (box.childCount === 1) {                            // the only paragraph: the block becomes a paragraph again
         const tr = state.tr.replaceWith(boxPos, boxPos + box.nodeSize, N.paragraph.create());
@@ -342,6 +436,10 @@
   /* ——— small DOM helpers ——— */
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const WIDTH = /^\d+(\.\d+)?(%|px)?$/;
+  /* The window's own spelling is off where Studio checks the language itself (book-spell.js), so nothing is underlined
+     twice; asked again on every update, so it comes back if Studio's checker can't run. */
+  const nativeSpelling = lang => root.BookSpell && root.BookSpell.covers(lang) ? "false" : "true";
+  const spellPlugins = T => root.BookSpell ? root.BookSpell.plugins(T) : [];
 
   /* ——— notes: a number in the text, its text in the margin (the ProseMirror footnote pattern) ——— */
   class NoteView {
@@ -360,8 +458,8 @@
       this.inner = new EditorView(body, {
         state: EditorState.create({doc: node, plugins: T.notePlugins(this)}),
         dispatchTransaction: tr => this.dispatchInner(tr),
-        nodeViews: {cite: (n, v, g) => new CiteView(n, v, g, T)},
-        attributes: {class: "bm-ed", spellcheck: "true", lang: T.lang, "aria-label": "Note"},
+        nodeViews: {cite: (n, v, g) => new CiteView(n, v, g, T), ...root.BookMath?.nodeViews(T)},
+        attributes: () => ({class: "bm-ed", spellcheck: nativeSpelling(T.lang), lang: T.lang, "aria-label": "Note"}),
         editable: () => !T.locked,
         handleDOMEvents: {
           focus: () => { this.T.noteFocus(this, true); return false; },
@@ -701,7 +799,9 @@
     update(view) {
       const st = slashKey.getState(view.state);
       if (!st || !st.open || !view.hasFocus()) { this.hide(); return; }
-      const items = slashItems(st.query, this.T.ctx.features()), key = items.map(i => i.id).join();
+      const F = root.BookFormat, lists = !!F?.commands.setList("bullet")(view.state);       // only where a list can be made
+      const items = slashItems(st.query, this.T.ctx.features(), view.state.doc.attrs.form, F?.current(view.state).list)
+        .filter(i => lists || !i.list), key = items.map(i => i.id).join();
       if (key !== this.key0) { this.active = 0; this.key0 = key; }
       this.items = items;
       if (!items.length) { this.hide(); return; }
@@ -741,11 +841,17 @@
   }
 
   /* ——— the selection bar ——— */
-  /* the bar's keys (Comment as in Google Docs, Index as in Word); shown in the buttons' titles */
-  const KEYS = {bold: "Mod-b", italic: "Mod-i", note: "Mod-Alt-f", comment: "Mod-Alt-m", index: "Shift-Alt-x"};
+  /* the bar's keys (Comment as in Google Docs, Index as in Word, Format as BookFormat.keymap binds it); shown in the
+     buttons' titles */
   const MAC = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform);
-  const keyName = k => k.split("-").map(p => p === "Mod" ? (MAC ? "⌘" : "Ctrl") : p === "Alt" ? (MAC ? "⌥" : "Alt") : p.length === 1 ? p.toUpperCase() : p).join(MAC ? "" : "+");
-  const NOTE_BAR = new Set(["bold", "italic", "source"]);     // what the bar offers inside a note's text
+  const KEYS = {bold: "Mod-b", italic: "Mod-i", note: "Mod-Alt-f", comment: "Mod-Alt-m", index: "Shift-Alt-x", format: MAC ? "Ctrl-Alt-o" : "Alt-o"};
+  const keyName = k => k.split("-").map(p => p === "Mod" ? (MAC ? "⌘" : "Ctrl") : p === "Ctrl" && MAC ? "⌃" : p === "Alt" ? (MAC ? "⌥" : "Alt") : p.length === 1 ? p.toUpperCase() : p).join(MAC ? "" : "+");
+  /* the bar's pressed buttons for the selection: Bold and Italic as the format panel shows them and as they toggle
+     (BookFormat.current), Index and Comment when some of the selection has them */
+  function barPressed(state) {
+    const {from, to} = state.selection, has = m => state.doc.rangeHasMark(from, to, m), marks = root.BookFormat.current(state).marks;
+    return {bold: marks.strong, italic: marks.em, index: has(M.idx), comment: has(M.comment)};
+  }
   class SelBar {
     constructor(T) {
       this.T = T;
@@ -763,7 +869,7 @@
       if (T.destroyed) return;
       const view = T.activeView(), sel = view.state.selection, inNote = view !== T.view;
       if (!view.hasFocus() || T.mouseDown || T.pop || sel.empty || !(sel instanceof TextSelection) || !sel.$from.parent.inlineContent) { this.hide(); return; }
-      const buttons = barButtons(T.ctx.features()).filter(([c]) => !inNote || NOTE_BAR.has(c)), key = buttons.map(b => b[0]).join();
+      const buttons = barButtons(T.ctx.features(), {multi: !sel.$from.sameParent(sel.$to), inNote}), key = buttons.map(b => b[0]).join();
       if (key !== this.key0) {
         this.key0 = key;
         this.el.replaceChildren(...buttons.map(([cmd, label]) => {
@@ -773,8 +879,7 @@
           return b;
         }));
       }
-      const {from, to} = sel, has = m => view.state.doc.rangeHasMark(from, to, m);
-      const pressed = {bold: has(M.strong), italic: has(M.em), index: has(M.idx), comment: has(M.comment)};
+      const pressed = barPressed(view.state), {from, to} = sel;
       for (const b of this.el.children) if (b.dataset.cmd in pressed) b.setAttribute("aria-pressed", pressed[b.dataset.cmd]);
       this.el.hidden = false;
       const a = view.coordsAtPos(from, 1), z = view.coordsAtPos(to, -1), page = T.page.getBoundingClientRect();
@@ -809,18 +914,23 @@
           cite: (n, v, g) => new CiteView(n, v, g, this),
           image: (n, v, g) => new ImageView(n, v, g, this),
           poem: (n, v, g) => isLinked(n) ? new LinkedView(n, v, g, this) : undefined,
+          ...root.BookMath?.nodeViews(this),          // math rendered by KaTeX, its source in a field under it (book-math.js)
+          ...root.BookTable?.nodeViews(this),         // a table that scrolls sideways, with its Table button (book-table.js)
         },
-        attributes: {class: "bk-text", spellcheck: "true", lang: this.lang, "aria-label": "Text", "aria-multiline": "true"},
+        attributes: () => ({class: "bk-text", spellcheck: nativeSpelling(this.lang), lang: this.lang, "aria-label": "Text", "aria-multiline": "true"}),
         handleDOMEvents: {
           mousedown: () => { this.mouseDown = true; this.selbar.hide(); return false; },
           focus: () => { this.selbar.update(); return false; },
           blur: () => { setTimeout(() => { if (this.destroyed) return; this.selbar.update(); if (!this.view.hasFocus()) this.slash.hide(); }); return false; },
         },
         handlePaste: (view, e) => { this.pasteWarning(e); return false; },
+        handleDrop: (view, e, slice, moved) => cellDrop(view, e, slice, moved),      // into a table's cell: one line of it
         transformPastedHTML: html => cleanPaste(html),
         // in a poem line, what is pasted keeps the indentation of its lines (and plain text its lines and stanzas)
         clipboardTextParser: (text, $at) => poemLine($at) ? poemText(text, $at.marks(), atLineStart($at)) : null,
-        transformPasted: (slice, view) => { const $f = view.state.selection.$from; return poemLine($f) ? poemPasted(slice, atLineStart($f)) : slice; },
+        transformPasted: (slice, view) => pasted(slice, view.state.selection.$from),
+        // the plain text of a copy: a list keeps its numbers (book-format.js)
+        clipboardTextSerializer: (slice, view) => root.BookFormat.clipboardText(slice, view.state),
       });
       this.onUp = () => { if (this.mouseDown && !this.destroyed) { this.mouseDown = false; this.selbar.update(); } };
       addEventListener("mouseup", this.onUp);
@@ -843,8 +953,13 @@
       return EditorState.create({doc, plugins: this.plugins()});
     }
     plugins() {
-      const T = this, quotes = () => T.ctx.sheet().quotes;
+      const T = this, quotes = () => T.ctx.sheet().quotes, F = root.BookFormat, TB = root.BookTable;
+      // a table's command (book-table.js), first in the Tab, Enter, Backspace and Delete chains; nothing without it
+      const cell = (name, ...a) => (!TB ? () => false : a.length ? TB.commands[name](...a) : TB.commands[name]);
       return [
+        // first: text typed or pasted over a selection across a table's cells goes into its first cell, before the /
+        // menu or a typing rule could replace the selection; a column's cells aligned, the Table button (book-table.js)
+        ...(TB ? TB.plugins() : []),
         slashPlugin(T),
         new Plugin({props: {handleTextInput(view, from, to, text) {
           const sel = view.state.selection;
@@ -853,6 +968,8 @@
             view.dispatch(tr.setSelection(TextSelection.create(tr.doc, sel.to + text.length)).scrollIntoView());
             return true;
           }
+          const below = root.BookMath?.typedAfter(view.state, text);   // on selected display math: into the line after it
+          if (below) { view.dispatch(below.scrollIntoView()); return true; }
           const spaces = poemTyped(view.state, from, text);         // the indentation of a poem line
           if (spaces == null) return false;
           view.dispatch(view.state.tr.insertText(spaces, from, to).scrollIntoView());
@@ -860,16 +977,19 @@
         }}}),
         inputRules({rules: blockRules(quotes)}),
         keymap({
-          "Enter": (s, d, v) => enter(s, d, v, T),
+          // a selected math opens its source; `$$` alone on a line becomes display math (book-math.js); in a table the
+          // cell below, out of its last row (book-table.js)
+          "Enter": chainCommands(mathEnter(T), cell("cellEnter"), F.commands.listEnter, (s, d, v) => enter(s, d, v, T)),
           "Shift-Enter": hardBreak,
-          "Tab": poemTab,
-          "Mod-b": toggleMark(M.strong), "Mod-i": toggleMark(M.em),
+          "Tab": chainCommands(cell("nextCell", 1), F.commands.listTab, poemTab), "Shift-Tab": chainCommands(cell("nextCell", -1), F.commands.listShiftTab),
           [KEYS.note]: () => { if (!barButtons(T.ctx.features()).some(b => b[0] === "note")) return false; T.command("note"); return true; },
           [KEYS.comment]: s => { if (s.selection.empty || !(s.selection instanceof TextSelection)) return false; T.command("comment"); return true; },
           [KEYS.index]: s => { if (s.selection.empty || T.ctx.features().index !== true) return false; T.command("index"); return true; },
           "Mod-z": undo, "Mod-y": redo, "Shift-Mod-z": redo,
-          "Backspace": chainCommands(undoInputRule, linkedNeighbour(-1)),
-          "Delete": linkedNeighbour(1),
+          "Backspace": chainCommands(undoInputRule, cell("cellBackspace"), F.commands.listBackspace, linkedNeighbour(-1)),
+          "Delete": chainCommands(cell("cellDelete"), linkedNeighbour(1)),
+          ...F.keymap(T),          // bold, italic and the rest of the format keys (book-format.js)
+          ...TB?.keymap(T),        // Ctrl+Alt+arrows: rows and columns (book-table.js)
         }),
         keymap(baseKeymap),
         history(),
@@ -882,6 +1002,7 @@
           return tr.setSelection(TextSelection.create(tr.doc, 1));
         }}),
         new Plugin({props: {decorations: placeholders}}),
+        ...F.plugins(T),          // the list markers, and the plugin that keeps a list's numbers (book-format.js)
         new Plugin({
           key: this.commentKey,
           state: {init: () => null, apply: (tr, prev) => { const m = tr.getMeta(this.commentKey); return m !== undefined ? m : prev && {from: tr.mapping.map(prev.from), to: tr.mapping.map(prev.to)}; }},
@@ -891,6 +1012,8 @@
           }},
         }),
         ...(root.BookTools ? root.BookTools.plugins(T) : []),      // echoes, the style sheet, find, focus (book-tools.js)
+        ...spellPlugins(T),                                         // spelling in the book's languages (book-spell.js)
+        ...(root.BoardDrop ? root.BoardDrop.plugins(T) : []),      /* part 3: quotes, sources and images dragged from the research board (board-rail.js) */
       ];
     }
     notePlugins(nv) {
@@ -900,13 +1023,15 @@
         keymap({
           "Mod-z": () => undo(outer().state, outer().dispatch), "Mod-y": () => redo(outer().state, outer().dispatch),
           "Shift-Mod-z": () => redo(outer().state, outer().dispatch),
-          "Mod-b": toggleMark(M.strong), "Mod-i": toggleMark(M.em),
           "Escape": () => { nv.leave(); return true; },
-          "Enter": () => { nv.leave(); return true; },
+          "Enter": chainCommands(mathEnter(T), () => { nv.leave(); return true; }),
           "Shift-Enter": (state, dispatch) => { dispatch(state.tr.replaceSelectionWith(N.hard_break.create()).scrollIntoView()); return true; },
           "Backspace": chainCommands(undoInputRule, state => { if (state.doc.content.size) return false; nv.remove(); return true; }),
+          ...root.BookFormat.keymap(T),          // bold, italic, underline, sizes … and the format panel; block keys do nothing here
         }),
         keymap(baseKeymap),
+        ...spellPlugins(T),
+        ...(root.BoardDrop ? root.BoardDrop.notePlugins(T, nv) : []),      /* part 3: a board drag dropped into a note (board-rail.js) */
       ];
     }
     dispatch(tr) {
@@ -959,6 +1084,7 @@
     lock(on) {
       this.locked = !!on;
       if (this.locked) this.closePop();            // a citation or index form open now would change the text under the lock
+      if (this.locked) root.BookMath?.closeAll(this);          // and so would a math's source field
       const editable = () => !this.locked;
       this.view.setProps({editable});
       for (const nv of this.margin.notes) nv.inner.setProps({editable});
@@ -1008,9 +1134,11 @@
     command(cmd) {
       if (this.locked) return;
       const v = this.activeView(), s = v.state, {from, to} = s.selection;
-      if (cmd === "bold") toggleMark(M.strong)(s, v.dispatch);
-      else if (cmd === "italic") toggleMark(M.em)(s, v.dispatch);
+      // as Ctrl+B and Ctrl+I do (book-format.js): over the notes a selection holds, never into a note's own text
+      if (cmd === "bold") root.BookFormat.commands.toggle("strong")(s, v.dispatch);
+      else if (cmd === "italic") root.BookFormat.commands.toggle("em")(s, v.dispatch);
       else if (cmd === "source") return this.citeForm(null, to, v);
+      else if (cmd === "format") return root.BookFormat?.openPanel?.(this);         // the format panel, in a note's text too
       else if (v !== this.view) return;
       else if (cmd === "note") return this.insertNote(to);
       else if (cmd === "index") return this.indexForm(from, to);
@@ -1026,6 +1154,15 @@
       if (id === "page") return this.insertBlock(N.page_break.create());
       if (id === "epigraph") return this.insertBlock(N.epigraph.create(null, N.paragraph.create()));
       if (id === "poem") return this.insertBlock(N.poem.create({src: null}, N.paragraph.create()));
+      if (id === "math") return root.BookMath?.insertDisplay(this);        // display math, its source open
+      if (id === "table") {                  // three columns, a header row and two rows, the cursor in the first cell
+        root.BookTable.commands.insertTable()(this.view.state, this.view.dispatch);
+        return this.view.focus();
+      }
+      if (id === "bullets" || id === "numbers") {
+        root.BookFormat.commands.setList(id === "bullets" ? "bullet" : "decimal")(this.view.state, this.view.dispatch);
+        return this.view.focus();
+      }
       if (id === "image") {
         return this.ctx.pickImage().then(src => { if (src) this.insertBlock(N.image.create({src, alt: "", width: null})); else this.view.focus(); })
           .catch(e => { this.ctx.say(e.message, true); this.view.focus(); });
@@ -1214,10 +1351,15 @@
     }
   }
 
-  /* Word and Google Docs leave list bullets and stray line breaks between paragraphs in what they copy; the schema's own
-     paste rules do the rest (italic and bold stay, headings become ## and ###, the rest plain paragraphs). */
+  /* A table's cells become one line each (BookTable.pasteCells), lists (HTML, Docs', Word's) the editor's own list items
+     and links lose their underline first (BookFormat.pasteLists). Word and Google Docs leave list bullets and stray line
+     breaks between paragraphs in what they copy; the schema's own paste rules do the rest (italic and bold stay, headings
+     become ## and ###, the rest plain paragraphs). */
   function cleanPaste(html) {
-    if (!/mso-|urn:schemas-microsoft|docs-internal-guid/i.test(html)) return html;
+    const office = /mso-|urn:schemas-microsoft|docs-internal-guid/i.test(html);
+    if (root.BookTable && /<t[dh]\b/i.test(html)) html = root.BookTable.pasteCells(html);
+    if (root.BookFormat && /<li\b|<a\b|mso-list/i.test(html)) html = root.BookFormat.pasteLists(html);
+    if (!office) return html;
     const d = new root.DOMParser().parseFromString(html, "text/html");
     d.querySelectorAll("[style]").forEach(e => { if (/mso-list\s*:\s*ignore/i.test(e.getAttribute("style"))) e.remove(); });
     d.querySelectorAll("br").forEach(br => { if (!br.closest("p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, div:not([id^=docs-internal])")) br.remove(); });
@@ -1248,6 +1390,6 @@
     // helpers, also for tests/js/book_text.js
     quoteFor, CLITIC, countWords, docWords, noteStart, citeLabel, sourceShort, slashItems, barButtons, commentRanges,
     indexTerm, editableDoc, titleOf, withTitle, CITE_KEY, blockRules, inlineRules, Margin,
-    poemTyped, poemTab, poemPasted, poemText, oneLine,
+    poemTyped, poemTab, poemPasted, poemText, oneLine, pasted, cellLine, cellDrop, barPressed,
   };
 })(typeof window !== "undefined" ? window : globalThis);

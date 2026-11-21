@@ -26,7 +26,7 @@ class BookToolsTest(unittest.TestCase):
 
     def test_no_control_characters(self):
         """The tools' files hold text only: no stray control bytes (a BEL once stood in for an escape)."""
-        for name in ("book-tools.js", "book-rail.js", "book-tools.css"):
+        for name in ("book-tools.js", "book-rail.js", "book-suggest.js", "book-tools.css"):
             data = (STATIC / name).read_bytes()
             bad = sorted({b for b in data if b < 0x20 and b not in (0x09, 0x0A, 0x0D)})
             self.assertEqual(bad, [], f"{name} has control bytes {bad}")

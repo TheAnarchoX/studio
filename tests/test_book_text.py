@@ -25,7 +25,8 @@ class BookTextTest(unittest.TestCase):
         try:
             (tmp / "input.json").write_text(json.dumps(docs), encoding="utf-8")
             r = subprocess.run([shutil.which("node"), str(HARNESS), str(STATIC / "vendor" / "prosemirror.js"),
-                                str(STATIC / "book-schema.js"), str(STATIC / "book-text.js"), str(tmp / "input.json")],
+                                str(STATIC / "book-schema.js"), str(STATIC / "book-text.js"), str(tmp / "input.json"),
+                                str(STATIC / "book-format.js")],
                                capture_output=True, text=True, encoding="utf-8", timeout=120)
             self.assertEqual(r.returncode, 0, r.stderr)
             out = json.loads(r.stdout)
@@ -40,6 +41,11 @@ class BookTextTest(unittest.TestCase):
                 md = manuscript.serialize(doc)
                 self.assertRegex(md, "(\N{NO-BREAK SPACE}|&#xA0;)\N{NO-BREAK SPACE}")
                 self.assertEqual(manuscript.parse(md, doc["attrs"]["form"]), solid(doc))
+        # pasted and dropped into a table's cell: one line of it, and the table as a reload gives it
+        self.assertEqual(len(out["cells"]), 12)
+        for doc in out["cells"]:
+            with self.subTest(doc=doc):
+                self.assertEqual(manuscript.parse(manuscript.serialize(doc)), solid(doc))
 
 
 def solid(doc):

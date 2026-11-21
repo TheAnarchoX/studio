@@ -23,7 +23,7 @@ import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import config, manuscript, styles
+from . import book_design, config, manuscript, styles
 from .store import StoreError, folder_name, read_text, write_text
 
 PIECE_KINDS = ("dedication", "epigraph", "content-note", "foreword", "preface", "introduction", "prologue", "part",
@@ -74,10 +74,10 @@ EDITION = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2}) (?P<name>.+)")      # edition
 SNAPSHOT_EVERY = timedelta(minutes=30)
 SNAPSHOT = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{4})(?:-(\d+))?")      # a second one in a minute gets -2, -3
 IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".gif", ".webp")      # not .svg: served from the library it could carry a script
-QUIET = ("editions", "drafts", "exports")      # they don't change what is open
+QUIET = ("editions", "drafts", "exports", "research")      # they don't change what is open; research: part 3
 EDITION_ITEMS = ("book.json", "manuscript", "images", "sources.json", "cover")
 LANGUAGE = config.LANGUAGE_TAG          # a language code: at most 35 characters, 6 subtags
-GAP = "￼"                  # stands for an inline node that isn't text (a note, a citation) while searching
+GAP = "￼"                  # stands for an inline node that isn't text (a note, a citation, math) while searching
 ON_OFF = {"sources": "Sources are", "figures": "Figures are", "contentNote": "The content note is"}
 SHEET = {"quotes": "“…”", "numbers": "words to ten", "terms": [], "notes": ""}     # book.json "style": the style sheet
 TERM_SHAPE = "Each term is a word to use, the forms not to use and a note."
@@ -95,6 +95,71 @@ class BooksError(StoreError):
         super().__init__(message)
         self.code = code
         self.details = extra or {}
+
+
+_HELD = threading.local()       # lock path -> how many times this thread has taken it
+
+
+def lock_path(d: Path) -> Path:
+    """The lock file for the book folder `d`. The app and the MCP server are separate processes writing the same
+    files, so changes that must not interleave take `file_lock` on it."""
+    return d / ".studio" / "books.lock"
+
+
+@contextlib.contextmanager
+def file_lock(path: Path, wait: float = 5.0, stale: float = 30.0):
+    """Hold a lock file across processes: created exclusively, retried every 50 ms, and a file older than `stale`
+    seconds (its owner died) is broken. Reentrant within one thread; only the outermost exit removes the file."""
+    held = getattr(_HELD, "paths", None)
+    if held is None:
+        held = _HELD.paths = {}
+    key = str(path)
+    if held.get(key):
+        held[key] += 1
+        try:
+            yield
+        finally:
+            held[key] -= 1
+        return
+    deadline = time.monotonic() + wait
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale:
+                    path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise BooksError("The book is busy with another change; try again in a moment.", 409) from None
+            time.sleep(0.05)
+        except PermissionError:         # Windows: the file is being deleted right now
+            if time.monotonic() >= deadline:
+                raise BooksError("The book is busy with another change; try again in a moment.", 409) from None
+            time.sleep(0.05)
+    held[key] = 1
+    try:
+        yield
+    finally:
+        held.pop(key, None)
+        _unlock(path)
+
+
+def _unlock(path: Path):
+    """Remove a lock file, never failing: the change it guarded is made, so a lock Windows won't let go of (a scanner
+    has it open) is retried for a second and then left, to go stale after 30 s."""
+    for attempt in range(20):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError:
+            if attempt == 19:
+                return
+            time.sleep(0.05)
 
 
 @contextlib.contextmanager
@@ -127,6 +192,62 @@ def _slug(title, kind):
 
 def _squash(s):
     return " ".join(str(s or "").split())
+
+
+def _fold(s):
+    return "".join(c for c in unicodedata.normalize("NFD", str(s if s is not None else "")) if unicodedata.category(c)[0] != "M").lower()
+
+
+_ARTICLES = {"de", "het", "een", "the", "a", "an"}
+
+
+def source_key(item: dict, taken) -> str:
+    """A new source's key, as the Sources form makes it (BookTools.sourceKey): the first author's (or editor's) name with its
+    particle, else the title's first word that isn't an article; then the year; b, c, ... z, then -2, -3 ... when taken."""
+    def first(field):
+        v = item.get(field)
+        return v[0] if isinstance(v, list) and v and isinstance(v[0], dict) else None
+    p = first("author") or first("editor")
+    base = ""
+    if p:
+        name = [p.get("non-dropping-particle"), p.get("family") or p.get("literal") or p.get("given")]
+        base = re.sub(r"[^a-z0-9]", "", _fold("".join(str(x) for x in name if x)))
+    if not base:
+        base = next((w for w in re.split(r"[^a-z0-9]+", _fold(item.get("title"))) if w and w not in _ARTICLES), "")
+    issued = item.get("issued")
+    parts = issued.get("date-parts") if isinstance(issued, dict) else None
+    y = parts[0][0] if isinstance(parts, list) and parts and isinstance(parts[0], list) and parts[0] else None
+    base = (base or "source") + (re.sub(r"[^0-9]", "", str(y)) if y else "")
+    key, n = base, 0
+    while key in taken:
+        key = base + (chr(98 + n) if n < 25 else "-" + str(n - 23))
+        n += 1
+    return key
+
+
+def _first_year(item):
+    issued = item.get("issued")
+    parts = issued.get("date-parts") if isinstance(issued, dict) else None
+    return re.sub(r"[^0-9]", "", str(parts[0][0])) if isinstance(parts, list) and parts and isinstance(parts[0], list) and parts[0] else ""
+
+
+def _idx_runs(node, out):
+    """Collect the index marks under node: runs of neighbouring text nodes with an equal idx mark are one entry."""
+    run = None
+    for n in node.get("content") or []:
+        if not isinstance(n, dict):
+            continue
+        mark = next((m for m in n.get("marks") or [] if isinstance(m, dict) and m.get("type") == "idx"), None)             if n.get("type") == "text" else None
+        if mark is None:
+            run = None
+            _idx_runs(n, out)
+            continue
+        term = (mark.get("attrs") or {}).get("term")
+        if run is not None and run[0] == term:
+            run[1].append(n.get("text", ""))
+        else:
+            run = (term, [n.get("text", "")])
+            out.append(run)
 
 
 def _dump(data):
@@ -249,15 +370,16 @@ def _text_of(nodes):
 
 
 def _containers(node, out):
-    """The places text lives in a document, in reading order: [("text" | "note", [inline nodes]), ("caption", image)]."""
+    """The places text lives in a document, in reading order: [("text" | "note", [inline nodes]), ("caption", image)].
+    A table cell is text, after the cells before it (row by row, left to right)."""
     t = node.get("type")
-    if t in ("title", "heading", "paragraph", "attribution"):
+    if t in ("title", "heading", "paragraph", "list_item", "attribution", "table_cell"):
         content = node.get("content") or []
         out.append(("text", content))
         for n in content:
             if n.get("type") == "note":
                 out.append(("note", n.get("content") or []))
-    elif t in ("blockquote", "epigraph", "poem", "doc"):
+    elif t in ("blockquote", "aligned", "epigraph", "poem", "table", "table_row", "doc"):
         for c in node.get("content") or []:
             _containers(c, out)
     elif t == "image" and (node.get("attrs") or {}).get("alt"):
@@ -357,6 +479,45 @@ class Books:
                 if d.name == name or d.name.lower() == name.lower():
                     return d
         raise BooksError(f"There's no book called {name} in Books.", 404)
+
+    def book_id(self, name) -> str:
+        """The folder name of a book named by its folder or its title (either case); unknown is the 404 `_dir` gives."""
+        try:
+            return self._dir(name).name
+        except BooksError:
+            want = str(name or "").strip().lower()
+            if not want:
+                raise
+            for d in self.dirs():
+                try:
+                    if str(self._meta(d).get("title") or "").strip().lower() == want:
+                        return d.name
+                except BooksError:
+                    continue
+            raise
+
+    def find_piece(self, book, name) -> str:
+        """The file of a piece named by its file name, its file stem or its title (either case)."""
+        d = self._dir(book)
+        want = str(name or "").strip().lower()
+        pieces = [e for e in self._meta(d)["contents"] if isinstance(e, dict) and valid_file(e.get("file"))]
+        for e in pieces:
+            if e["file"].lower() == want:
+                return e["file"]
+        hits = []
+        for e in pieces:
+            if want and want == e["file"][:-3].lower():
+                hits.append(e["file"])
+                continue
+            c = _piece_counts(self._path(d, e["file"]), self._form(e)) if want else None
+            if want and str((c or {}).get("title") or "").strip().lower() == want:
+                hits.append(e["file"])
+        said = str(name or "").strip()
+        if not hits:
+            raise BooksError(f"There's no piece {said} in this book.", 404)
+        if len(hits) > 1:
+            raise BooksError(f"{said} is the title of {', '.join(hits[:-1])} and {hits[-1]}: name the file.", 400)
+        return hits[0]
 
     def _meta(self, d: Path) -> dict:
         try:
@@ -527,8 +688,12 @@ class Books:
             contents.append(e)
         # `style` in the reply is the resolved look, as for series and poems; book.json's own "style" (the style sheet)
         # comes as `style_sheet`
+        from . import suggestions                   # imported here: that module imports this one
+        summary = suggestions.summary(self, d.name)
         meta.update({"id": d.name, "path": str(d), "contents": contents, "words": total, "days": self._days(d, True),
-                     "style_sheet": style_sheet(meta.get("style")), "style": self._style(meta)})
+                     "style_sheet": style_sheet(meta.get("style")), "style": self._style(meta),
+                     "suggestions": summary})
+        meta["spelling"] = book_design.spelling(meta)       # resolved; the file keeps what was stored
         return meta
 
     # ——— the book's details ———
@@ -578,6 +743,13 @@ class Books:
                     meta["style"] = self._house_style(meta.get("style"), fields[key])
             if "contents" in fields:
                 meta["contents"] = self._contents(d, fields["contents"], meta["contents"])
+            if fields.get("design_reset"):
+                meta["design"] = book_design.reset(meta.get("design") or {}, fields["design_reset"])
+            if "design" in fields:
+                meta["design"] = book_design.clean(meta.get("design") or {}, fields["design"])
+            if "spelling" in fields:
+                current = meta.get("spelling") if isinstance(meta.get("spelling"), dict) else {}
+                meta["spelling"] = {**current, **book_design.clean_spelling(fields["spelling"])}
             changes = {}
             with _bad_request():        # the styles module speaks StoreError
                 if fields.get("detach"):
@@ -1027,7 +1199,77 @@ class Books:
             raise BooksError(f"sources.json can't be read: {e}") from None
         return items if isinstance(items, list) else []
 
+    def _strict_sources(self, d: Path) -> list:
+        """The sources for a change: only a missing file is empty; one that can't be read is never written over."""
+        try:
+            items = json.loads((d / "sources.json").read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError) as e:
+            raise BooksError(f"sources.json can't be read: {e}", 400) from None
+        if not isinstance(items, list):
+            raise BooksError("sources.json can't be read: it is not a list.", 400)
+        return items
+
+    def add_source(self, book, item) -> dict:
+        """Add one source (CSL-JSON) with a key made like the Sources form's; a repeat is refused, naming what it repeats."""
+        if not isinstance(item, dict) or not isinstance(item.get("title"), str) or not item["title"].strip():
+            raise BooksError("A source needs a title.")
+        item = dict(item)
+        if item.get("id") is not None and not isinstance(item["id"], str):
+            raise BooksError("A source's id is text, like vandijk2019.", 400)
+        if not isinstance(item.get("type"), str) or not item["type"].strip():
+            item["type"] = "book"
+        d = self._dir(book)
+        with _LOCK, file_lock(lock_path(d)):
+            items = self._strict_sources(d)
+            taken = {i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), str)}
+            if item.get("id") is None:
+                item["id"] = source_key(item, taken)
+            elif item["id"] in taken:
+                raise BooksError(f"There's already a source {item['id']}", 400)
+            title, year = _squash(_fold(item["title"])), _first_year(item)
+            for other in items:
+                if not isinstance(other, dict):
+                    continue
+                same = any(isinstance(item.get(f), str) and item[f].strip() and isinstance(other.get(f), str)
+                           and _squash(other[f]).lower() == _squash(item[f]).lower() for f in ("DOI", "URL"))
+                same = same or (isinstance(other.get("title"), str) and _squash(_fold(other["title"])) == title
+                                and _first_year(other) == year)
+                if same:
+                    raise BooksError(f"{other.get('id')} looks like the same source", 400)
+            self._write_sources(d, items + [item])
+        return item
+
+    def index_terms(self, book) -> list:
+        """The index terms in use: [{term, count, pieces}], A to Z. A term is the mark's own, or the words it marks."""
+        d = self._dir(book)
+        found = {}
+        for e in self._pieces(d):
+            try:
+                md = self._text_or_none(d, e)
+                doc = manuscript.parse(md, self._form(e)) if md is not None else None
+            except (OSError, BooksError):
+                continue
+            runs = []
+            if doc:
+                _idx_runs(doc, runs)
+            for term, texts in runs:
+                term = _squash(term if term is not None else "".join(texts))
+                if term:
+                    hit = found.setdefault(term, {"term": term, "count": 0, "pieces": []})
+                    hit["count"] += 1
+                    if e["file"] not in hit["pieces"]:
+                        hit["pieces"].append(e["file"])
+        return sorted(found.values(), key=lambda h: (h["term"].casefold(), h["term"]))
+
     def save_sources(self, book, items) -> list:
+        d = self._dir(book)
+        with _LOCK, file_lock(lock_path(d)):
+            return self._write_sources(d, items)
+
+    def _write_sources(self, d: Path, items) -> list:
+        """Validate and write sources.json; the caller holds the lock."""
         if not isinstance(items, list):
             raise BooksError("The sources are a list.")
         seen = set()
@@ -1042,8 +1284,7 @@ class Books:
             if not isinstance(kind, str) or not kind.strip():
                 raise BooksError(f"Source {key} needs a type (book, article-journal, webpage, ...).")
             seen.add(key)
-        with _LOCK:
-            write_text(self._dir(book) / "sources.json", _dump(items))
+        write_text(d / "sources.json", _dump(items))
         return items
 
     def save_image(self, book, name, data: bytes) -> str:

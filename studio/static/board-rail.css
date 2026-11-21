@@ -1,0 +1,24 @@
+/* The research board beside the text (board-rail.js): the writing window's Board panel. Its rows are the rail's
+   lists (book-tools.css .br-*); this adds the board's switch, the kind above the title, and a row opened in place. */
+.bp-tools{margin-bottom:10px}
+.bp-tools .btn{flex:none;text-decoration:none}
+.bp-which{display:flex;width:100%}
+.bp-which button{flex:1;padding:8px 10px;font-size:11px}
+.bp .bp-row{display:flex;flex-direction:column;gap:4px}
+.bp .bp-row[draggable="true"]{cursor:grab}
+.bp .bp-row[draggable="true"]:active{cursor:grabbing}
+.bp-k{font:600 10.5px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--fog)}
+.bp-t{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font:500 15px/1.35 var(--serif);color:var(--paper);overflow-wrap:break-word}
+.bp-t.words{font-style:italic;font-weight:400;color:var(--paper-dim)}      /* first words, not a title: set apart, as on the board */
+.bp .bp-row:hover .bp-t{color:var(--paper-hot)}
+.bp-s{font:500 12px/1.3 var(--sans);color:var(--fog)}
+.bp-m{font:400 12px/1.45 var(--sans);color:var(--fog);overflow-wrap:break-word}
+/* opened: the panel's ground and the red rule, as the rail's current item */
+.bp-i.open::before{content:"";position:absolute;inset:0 -20px;z-index:-1;background:var(--panel);box-shadow:inset 2px 0 0 var(--red)}
+.bp-i.open .bp-t{-webkit-line-clamp:unset}
+.bp-more{padding:0 0 14px}
+.bp-x{margin:0 0 12px;font:400 14px/1.5 var(--serif);color:var(--paper-dim);white-space:pre-wrap;overflow-wrap:break-word}
+.bp-img{display:block;max-width:100%;max-height:220px;margin:0 0 12px;border:1px solid var(--line-soft)}
+.bp-more .br-acts{margin:0 0 12px}
+/* under the button, on one line however narrow the panel */
+.bp-open{display:inline-block;white-space:nowrap;text-decoration:none}

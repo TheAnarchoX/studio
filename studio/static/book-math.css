@@ -1,0 +1,36 @@
+/* LaTeX math in the writing window (book-math.js): KaTeX's rendering in the text and in a note's text, and the field
+   where its source is written. Loaded after KaTeX's own CSS and book.css. Studio's tokens only, so light and dark follow
+   app.css's theme; the math takes the text's own colour, and what KaTeX can't render the red of Studio's warnings
+   (book-math.js sets it). */
+
+/* ——— inline math: on the line's baseline, at the size of the text around it (KaTeX sets its face at 1.21 times the
+   text, for Times; the book's faces are larger on the body). It follows a size mark and a heading's size in em. ——— */
+:is(.bk-text,.bm-ed) .bk-math{cursor:pointer}
+:is(.bk-text,.bm-ed) .bk-math .katex{font-size:1.1em}
+:is(.bk-text,.bm-ed) .bk-math:is(.sel,.open){background:color-mix(in srgb,var(--red) 14%,transparent)}
+
+/* ——— display math: a block of its own, centred, with a paragraph's space after it; wider than the column it scrolls
+   sideways inside the column ——— */
+.bk-text .bk-mathd{margin:0 0 .65em}
+.bk-mathd .bk-math-r{overflow-x:auto;overflow-y:hidden;padding:.15em 0;text-align:center;cursor:pointer;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.bk-mathd .bk-math-r .katex-display{margin:0}
+.bk-mathd .bk-math-r .katex{font-size:1.1em}
+.bk-mathd.sel:not(.open) .bk-math-r{outline:2px solid var(--red);outline-offset:3px}
+.bk-mathd.open .bk-math-r{background:color-mix(in srgb,var(--red) 8%,transparent)}
+:is(.bk-text,.bm-ed)[contenteditable=false] :is(.bk-math,.bk-math-r){cursor:default}
+
+/* math without a source yet (while its field is open): the word, as the page break's label */
+.bk-math-ph{font:600 10px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--fog);white-space:nowrap}
+.bk-math .bk-math-ph{padding:0 .3em}
+.bk-math-r>.bk-math-ph{display:inline-block;padding:.6em 0}
+
+/* ——— the source field: under inline math, over the text (in .bw-over, as the / menu); in display math, under the
+   rendering, in the text's flow. The house input in a monospaced face; under it KaTeX's message, or the key that
+   closes it. ——— */
+.bk-mathf{position:absolute;z-index:6;width:min(360px,calc(100% - 16px));padding:8px;background:var(--pop);border:1px solid var(--line);
+  box-shadow:0 12px 34px var(--shadow-1)}
+.bk-mathf.bk-mathf-d{position:static;width:auto;margin:.55em 0 0;padding:0;background:none;border:0;box-shadow:none}
+.bk-mathf .bk-mathf-in{display:block;margin:0;padding:8px 10px;font:400 14px/1.45 ui-monospace,Consolas,monospace;letter-spacing:0;color:var(--paper)}
+.bk-mathf textarea.bk-mathf-in{min-height:0;resize:none;overflow:hidden}
+.bk-mathf-msg{margin:6px 1px 0;font:400 12px/1.4 var(--sans);letter-spacing:0;color:var(--fog);text-align:left;white-space:normal;overflow-wrap:anywhere}
+.bk-mathf-msg.err{color:var(--red)}

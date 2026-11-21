@@ -7,6 +7,8 @@ import zipfile
 from pathlib import Path
 
 import docx
+from docx.oxml import parse_xml
+from docx.oxml.ns import qn
 
 from studio import book_export, book_import, examples, manuscript
 from studio.books import Books, BooksError
@@ -72,6 +74,28 @@ def with_footnote(data, anchor, footnote_xml):
             z.writestr(name, blob)
         z.writestr("word/footnotes.xml", fn)
     return out.getvalue()
+
+
+def numbering(d, abstract_id, levels, nums):
+    """Add a numbering definition to the document: an abstractNum whose levels are [(numFmt, start)] and a w:num for
+    each {numId: startOverride of level 0, or None}."""
+    root = d.part.numbering_part.element
+    lvls = "".join(f'<w:lvl w:ilvl="{i}"><w:start w:val="{start}"/><w:numFmt w:val="{fmt}"/>'
+                   f'<w:lvlText w:val="%{i + 1}."/></w:lvl>' for i, (fmt, start) in enumerate(levels))
+    root.find(qn("w:num")).addprevious(parse_xml(f'<w:abstractNum {W} w:abstractNumId="{abstract_id}">{lvls}</w:abstractNum>'))
+    for num_id, override in nums.items():
+        extra = (f'<w:lvlOverride w:ilvl="0"><w:startOverride w:val="{override}"/></w:lvlOverride>'
+                 if override is not None else "")
+        root.append(parse_xml(f'<w:num {W} w:numId="{num_id}"><w:abstractNumId w:val="{abstract_id}"/>{extra}</w:num>'))
+
+
+def item(d, text, num_id, level=0, style=None):
+    """A paragraph numbered by `num_id` at `level`, as Word's list buttons make one."""
+    p = d.add_paragraph(text, style=style)
+    num_pr = p._p.get_or_add_pPr().get_or_add_numPr()
+    num_pr.get_or_add_ilvl().val = level
+    num_pr.get_or_add_numId().val = num_id
+    return p
 
 
 NOTE_XML = ('<w:r><w:t xml:space="preserve"> A note with </w:t></w:r>'
@@ -201,10 +225,197 @@ class ImportTest(unittest.TestCase):
                 '<ul><li>one</li><li>two</li></ul><ol><li>first</li></ol>')
         blocks = book_import.html_to_blocks(html)
         self.assertEqual([b["type"] for b in blocks],
-                         ["title", "subtitle", "h2", "h3", "p", "p", "quote", "p", "p", "p"])
+                         ["title", "subtitle", "h2", "h3", "p", "p", "quote", "li", "li", "li"])
         self.assertEqual([b["italic_only"] for b in blocks][4:6], [True, False])
         self.assertFalse(any(b["empty"] for b in blocks))
-        self.assertEqual([b["md"] for b in blocks][7:], ["• one", "• two", "1\\. first"])
+        self.assertEqual([(b["md"], b["list"]) for b in blocks[7:]], [("one", "bullet"), ("two", "bullet"),
+                                                                       ("first", "decimal")])
+
+    def test_tables_from_mammoth_html(self):
+        def md(html):
+            blocks = book_import.html_to_blocks(html)
+            return manuscript.serialize({"type": "doc", "content": [b["node"] for b in blocks if b["type"] == "table"]})
+
+        html = "<table><tr><th>A</th><th>B</th></tr><tr><td><p>c</p><p>d</p></td><td>e</td></tr></table>"
+        self.assertEqual([b["type"] for b in book_import.html_to_blocks(html)], ["table"])
+        self.assertEqual(md(html), "| A | B |\n| --- | --- |\n| c d | e |\n")
+        # no th cells: the first row is the header all the same; short rows are padded
+        self.assertEqual(md("<table><tr><td>a</td></tr><tr><td>b</td><td>c</td></tr></table>"),
+                         "| a |  |\n| --- | --- |\n| b | c |\n")
+        self.assertEqual(md("<table><thead><tr><td>a</td><td>b</td></tr></thead>"
+                            "<tbody><tr><td>c</td><td>d</td></tr></tbody></table>"),
+                         "| a | b |\n| --- | --- |\n| c | d |\n")
+        # marks stay, a line break becomes a space, a nested table flattens to its text
+        self.assertEqual(md("<table><tr><td><strong>vet</strong><br/>twee</td>"
+                            "<td><table><tr><td>x</td><td>y</td></tr></table></td></tr></table>"),
+                         "| **vet** twee | x y |\n| --- | --- |\n")
+        # pictures come after the table
+        blocks = book_import.html_to_blocks('<table><tr><td>a <img src="foto.png"/></td></tr></table><p>na</p>')
+        self.assertEqual([b["type"] for b in blocks], ["table", "image", "p"])
+
+    def test_a_cell_that_starts_with_a_list(self):
+        """A list in a cell is its items' text, apart by a space, and nothing before the first item."""
+        [block] = book_import.html_to_blocks("<table><tr><td><ul><li><em>een</em></li><li>twee</li></ul></td>"
+                                             "<td>voor<ol><li>drie</li></ol></td></tr></table>")
+        first, second = block["node"]["content"][0]["content"]
+        self.assertEqual(first["content"], [{"type": "text", "marks": [{"type": "em"}], "text": "een"},
+                                            {"type": "text", "text": " twee"}])
+        self.assertEqual(second["content"], [{"type": "text", "text": "voor drie"}])
+
+    def test_equations_in_a_docx_are_counted_not_imported(self):
+        math = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>'
+
+        def with_equations(n, para=False):
+            def extra(d):
+                p = d.add_paragraph("Een formule: ")
+                for _ in range(n):
+                    el = parse_xml(math)
+                    if para:
+                        wrapper = parse_xml('<m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"/>')
+                        wrapper.append(el)
+                        el = wrapper
+                    p._p.append(el)
+            return build(extra)
+        self.assertEqual(book_import.propose("boek.docx", with_equations(1))["warnings"],
+                         ["This file has 1 equation; Studio doesn't import equations yet."])
+        self.assertEqual(book_import.propose("boek.docx", with_equations(3, para=True))["warnings"],
+                         ["This file has 3 equations; Studio doesn't import equations yet."])
+        self.assertEqual(book_import.propose("boek.docx", with_equations(0))["warnings"], [])
+        self.assertEqual(book_import.propose("boek.md", b"Tekst met $x$.\n")["warnings"], [])
+
+    def test_math_in_markdown_imports(self):
+        """Math comes in from Markdown as it is; the indented lines of display math in a poem stay TeX (no no-break
+        spaces), as Studio's own Markdown export writes them."""
+        md = ("<!-- kind: chapter; form: poem -->\n\n# Gedicht\n\nRegel $x$\n  ingesprongen\n\n"
+              "$$\n\\begin{aligned}\n  a &= b\n\\end{aligned}\n$$\n\n"
+              "<!-- kind: chapter; form: prose -->\n\n# Proza\n\nDe som $a+b$.\n\n$$\n  c\n$$\n")
+        poem, prose = book_import.propose("boek.md", md.encode("utf-8"))["pieces"]
+        self.assertEqual(poem["md"], "# Gedicht\n\nRegel $x$\n\N{NO-BREAK SPACE}\N{NO-BREAK SPACE}ingesprongen\n\n"
+                                     "$$\n\\begin{aligned}\n  a &= b\n\\end{aligned}\n$$\n")
+        self.assertEqual(prose["md"], "# Proza\n\nDe som $a+b$.\n\n$$\nc\n$$\n")
+        self.assertEqual((poem["words"], prose["words"]), (2, 2))
+        # `$$` with no closing `$$` before a blank line is no display math: the lines after it are poem lines
+        md = ("<!-- kind: chapter; form: poem -->\n\nRegel\n$$ geen formule\n  ingesprongen\n\nRegel\n$$\n  x\n$$\n"
+              "  verder\n")
+        [poem] = book_import.propose("boek.md", md.encode("utf-8"))["pieces"]
+        self.assertEqual(poem["md"], "Regel\n\\$\\$ geen formule\n\N{NO-BREAK SPACE}\N{NO-BREAK SPACE}ingesprongen\n\n"
+                                     "Regel\n\n$$\nx\n$$\n\n&#xA0;\N{NO-BREAK SPACE}verder\n")
+        # a file without markers, through the import rules
+        got = book_import.propose("boek.md", "# Boek\n\n# Een\n\nTekst $x$.\n\n$$\ny\n$$\n\nNa.\n".encode("utf-8"))
+        self.assertEqual([p["md"] for p in got["pieces"]], ["# Een\n\nTekst $x$.\n\n$$\ny\n$$\n\nNa.\n"])
+
+    def test_a_docx_table_imports_as_a_table(self):
+        d = docx.Document()
+        d.add_paragraph("Boek", style="Title")
+        d.add_paragraph("Voor.")
+        t = d.add_table(rows=2, cols=2)
+        for r, values in enumerate((("Jaar", "Plaats"), ("1984", "Utrecht"))):
+            for c, text in enumerate(values):
+                t.cell(r, c).text = text
+        d.add_paragraph("Na.")
+        [piece] = book_import.propose("tabel.docx", save(d))["pieces"]
+        self.assertEqual(piece["md"],
+                         "Voor.\n\n| Jaar | Plaats |\n| --- | --- |\n| 1984 | Utrecht |\n\nNa.\n")
+
+    def test_lists_from_mammoth_html(self):
+        blocks = book_import.html_to_blocks("<ol><li>een<ol><li>sub</li></ol></li><li>twee</li></ol><ul><li>punt</li></ul>")
+        self.assertEqual([(b["type"], b["md"], b["list"], b["level"], b["_n"]) for b in blocks],
+                         [("li", "een", "decimal", 0, 1), ("li", "sub", "lower-alpha", 1, 1),
+                          ("li", "twee", "decimal", 0, 2), ("li", "punt", "bullet", 0, 1)])
+        self.assertEqual(book_import._piece("chapter", None, blocks)["md"], "1. een\n   a. sub\n2. twee\n\n- punt\n")
+        # deeper levels by default: decimal, lower-alpha, lower-roman, decimal
+        deep = book_import.html_to_blocks("<ol><li>a<ol><li>b<ol><li>c<ol><li>d</li></ol></li></ol></li></ol></li></ol>")
+        self.assertEqual([(b["list"], b["level"]) for b in deep],
+                         [("decimal", 0), ("lower-alpha", 1), ("lower-roman", 2), ("decimal", 3)])
+        # an item's paragraphs join with a space; its pictures come after it, once (not again after its parent)
+        blocks = book_import.html_to_blocks('<ol><li><p>een</p><p>verder <img src="foto.png"/></p></li><li>twee'
+                                            '<ol><li>sub <img src="b.png"/></li></ol></li></ol>')
+        self.assertEqual([(b["type"], b.get("md"), b.get("_n")) for b in blocks],
+                         [("li", "een verder", 1), ("image", "", None), ("li", "twee", 2), ("li", "sub", 1),
+                          ("image", "", None)])
+        self.assertEqual(book_import._piece("chapter", None, blocks)["md"],
+                         "1. een verder\n\n![](../images/foto.png)\n\n2. twee\n   a. sub\n\n![](../images/b.png)\n")
+        # a level mammoth opens without an item of its own (an empty <li> around the nested list) is no item and takes
+        # no place in the count
+        blocks = book_import.html_to_blocks("<ol><li><ol><li>diep</li></ol></li><li>een</li></ol>")
+        self.assertEqual([(b["md"], b["list"], b["level"], b["_n"]) for b in blocks],
+                         [("diep", "lower-alpha", 1, 1), ("een", "decimal", 0, 1)])
+        self.assertEqual(book_import._piece("chapter", None, blocks)["md"], "a. diep\n\n1) een\n")
+
+    def test_list_items_are_no_dedication_epigraph_or_author(self):
+        blocks = book_import.html_to_blocks('<h1 class="doc-title">Boek</h1><ul><li><em>Voor jou.</em></li></ul>'
+                                            '<h1>Een</h1><ul><li><em>Een regel.</em></li><li>— Iemand</li></ul><p>Tekst.</p>')
+        got = book_import._assemble(blocks, "Voor jou.", "x")
+        self.assertEqual((got["author"], kinds(got)), ("", ["chapter", "chapter"]))
+        self.assertEqual(got["pieces"][0]["md"], "- *Voor jou.*\n")
+        self.assertEqual(got["pieces"][1]["md"], "# Een\n\n- *Een regel.*\n- — Iemand\n\nTekst.\n")
+
+    def test_list_styles_are_used_only_when_they_line_up(self):
+        html = "<ol><li>een<ol><li>sub</li></ol></li><li>twee</li></ol>"
+        word = [("upper-roman", 0, 4), ("lower-roman", 1, 1), ("upper-roman", 0, 5)]
+        self.assertEqual([(b["list"], b["_n"]) for b in book_import.html_to_blocks(html, word)],
+                         [("upper-roman", 4), ("lower-roman", 1), ("upper-roman", 5)])
+        for off in (word[:2], word + [("decimal", 0, 1)], [word[0], ("lower-roman", 0, 1), word[2]], []):
+            self.assertEqual([(b["list"], b["_n"]) for b in book_import.html_to_blocks(html, off)],
+                             [("decimal", 1), ("lower-alpha", 1), ("decimal", 2)], off)
+        # the notes' own list is not counted
+        notes = ('<ol><li>een<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></li></ol>'
+                 '<ol><li id="footnote-1"><p>Noot. <a href="#footnote-ref-1">↑</a></p></li></ol>')
+        self.assertEqual([(b["md"], b["list"]) for b in book_import.html_to_blocks(notes, [("lower-alpha", 0, 1)])],
+                         [("een^[Noot.]", "lower-alpha")])
+
+    def test_docx_lists_keep_their_formats(self):
+        d = docx.Document()
+        numbering(d, 20, [("upperRoman", 1), ("lowerLetter", 1)], {20: None})
+        item(d, "Een", 20)
+        item(d, "Twee", 20)
+        item(d, "Sub", 20, 1)
+        d.add_paragraph("Tussen.")
+        item(d, "Drie", 20)
+        data = save(d)
+        self.assertEqual(book_import._docx_list_styles(data),
+                         [("upper-roman", 0, 1), ("upper-roman", 0, 2), ("lower-alpha", 1, 1), ("upper-roman", 0, 3)])
+        [piece] = book_import.propose("lijst.docx", data)["pieces"]
+        self.assertEqual(piece["md"], "I.  Een\nII.  Twee\n     a. Sub\n\nTussen.\n\nIII.  Drie\n")
+
+    def test_docx_numbers_are_counted_as_word_counts_them(self):
+        d = docx.Document()
+        numbering(d, 21, [("decimal", 1), ("lowerRoman", 1)], {21: None, 22: 1, 23: None})
+        numbering(d, 22, [("decimal", 1)], {24: None})
+        d.add_paragraph("Boek", style="Title")
+        item(d, "Hoofdstuk", 24, style="Heading 1")       # a numbered heading stays a heading
+        item(d, "Een", 21)
+        item(d, "sub een", 21, 1)
+        item(d, "sub twee", 21, 1)
+        item(d, "", 21)                                   # Word shows 2. on the empty line; mammoth leaves it out
+        item(d, "Drie", 21)
+        item(d, "sub drie", 21, 1)                        # a deeper level starts again under a new item
+        d.add_paragraph("Pauze.")
+        item(d, "Opnieuw", 22)                            # another w:num of the same list that restarts at 1
+        d.add_paragraph("Tussendoor.")
+        item(d, "Verder", 23)                             # one that doesn't: it goes on counting
+        d.add_paragraph("Punt", style="List Bullet")      # a list from a paragraph style
+        table = d.add_table(rows=1, cols=1)
+        item(table.cell(0, 0), "In een tabel", 21)
+        data = save(d)
+        self.assertEqual(book_import._docx_list_styles(data),
+                         [("decimal", 0, 1), ("lower-roman", 1, 1), ("lower-roman", 1, 2), ("decimal", 0, 3),
+                          ("lower-roman", 1, 1), ("decimal", 0, 1), ("decimal", 0, 2), ("bullet", 0, 1),
+                          ("decimal", 0, 3)])
+        [piece] = book_import.propose("telling.docx", data)["pieces"]
+        self.assertEqual(piece["md"], "# Hoofdstuk\n\n1. Een\n   i. sub een\n   ii. sub twee\n2. Drie\n   i. sub drie\n\n"
+                                      "Pauze.\n\n1. Opnieuw\n\nTussendoor.\n\n2. Verder\n\n- Punt\n\n"
+                                      "| In een tabel |\n| --- |\n")      # a list in a table cell is the cell's text
+
+    def test_underline_and_strike_are_kept(self):
+        self.assertEqual(book_import.html_to_blocks("<p><u>o</u> <s>weg</s></p>")[0]["md"], "[o]{.underline} ~~weg~~")
+        self.assertEqual(book_import.html_to_blocks("<p><del>a</del> <strike>b</strike></p>")[0]["md"], "~~a~~ ~~b~~")
+        d = docx.Document()
+        p = d.add_paragraph()
+        p.add_run("o").underline = True
+        p.add_run(" ")
+        p.add_run("weg").font.strike = True
+        self.assertEqual(book_import.propose("s.docx", save(d))["pieces"][0]["md"], "[o]{.underline} ~~weg~~\n")
 
     def test_footnote_in_a_real_docx(self):
         data = with_footnote(build(), "It began on a Monday.", NOTE_XML)
@@ -398,6 +609,16 @@ class ImportTest(unittest.TestCase):
             self.assertEqual(book["contents"][-1]["title"], "")
 
     # ——— the final review ———
+    def test_a_scene_break_between_rules_is_not_a_yaml_block(self):
+        text = "---\n\nFirst paragraph.\n\nSecond paragraph.\n\n---\n\nThird paragraph.\n"
+        got = book_import.propose("a.md", text.encode("utf-8"))
+        body = "\n".join(p["md"] for p in got["pieces"])
+        for word in ("First", "Second", "Third"):
+            self.assertIn(word + " paragraph", body)
+        text = "---\nFirst line.\nSecond line.\n---\n\nThird.\n"        # prose lines, no keys: text too
+        got = book_import.propose("a.md", text.encode("utf-8"))
+        self.assertIn("First line", "\n".join(p["md"] for p in got["pieces"]))
+
     def test_studios_own_markdown_export_imports_back(self):
         with tempfile.TemporaryDirectory() as tmp:
             books = Books(Path(tmp) / "Books")
